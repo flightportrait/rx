@@ -1,3 +1,4 @@
+#![allow(clippy::chunks_exact_to_as_chunks)] // chunks_exact(2) reads as "one sample"; as_chunks does not
 //! Unsigned 8-bit interleaved I/Q, the rtl_sdr output format (readsb's
 //! `--iformat UC8`). One sample is two bytes: I then Q, each centered on
 //! 127.4 (the RTL2832U's measured DC level, as readsb uses).
