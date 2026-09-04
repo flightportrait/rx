@@ -270,18 +270,14 @@ fn main() -> Result<()> {
         let mut delivered: u64 = 0; // samples delivered by the dongle
         let mut clock: u64 = 0; // stream index including accounted gaps
         let mut gaps: u64 = 0;
-        // The stream runs a steady latency behind wall time (the dongle's
-        // and the driver's buffers). The lag is only meaningful on a read
-        // that waited for the hardware: a read that returned at once was
-        // draining a backlog the decoder let build up, and its lag says
-        // nothing about loss. On settled reads, a lag grown by more than a
-        // block over the smallest settled lag seen recently, four times in
-        // a row, is a loss; the clock advances by the growth so the frames
-        // after it keep true timestamps.
-        let mut min_lag: i64 = i64::MAX;
-        let mut settled_reads: u64 = 0;
-        let mut behind_for: u32 = 0;
-        let block_time = Duration::from_secs_f64(BLOCK_BYTES as f64 / 2.0 / SAMPLE_RATE as f64);
+        // The clock is the count of delivered samples, as in readsb. It is
+        // not corrected from wall time: on this hardware the stream drifts
+        // against the wall clock by far more than any crystal error, and a
+        // synthesized correction only injected false jumps. A genuine USB
+        // loss shows as a discontinuity that MLAT servers detect as a clock
+        // reset; a dongle outage (below) is such a reset and is logged.
+        let mut short_reads: u64 = 0;
+        let mut last_short_report = Instant::now();
         loop {
             while let Ok(t) = gain_rx.try_recv() {
                 match dev.set_gain(t) {
@@ -317,51 +313,23 @@ fn main() -> Result<()> {
             buf.truncate(n & !1);
             let samples = (buf.len() / 2) as u64;
             let read_took = read_started.elapsed();
-            let settled = read_took >= block_time.mul_f64(0.8);
             if clock_debug {
                 let expected = (t0.elapsed().as_secs_f64() * SAMPLE_RATE as f64) as i64;
                 let lag = expected - (delivered + samples) as i64;
                 eprintln!(
-                    "rx: clock read {:.1} ms {} lag {:.1} ms baseline {:.1} ms samples {}",
+                    "rx: clock read {:.1} ms lag {:.1} ms samples {}",
                     read_took.as_secs_f64() * 1e3,
-                    if settled { "settled" } else { "backlog" },
                     lag as f64 / SAMPLE_RATE as f64 * 1e3,
-                    if min_lag == i64::MAX {
-                        f64::NAN
-                    } else {
-                        min_lag as f64 / SAMPLE_RATE as f64 * 1e3
-                    },
                     samples
                 );
             }
-            if settled {
-                settled_reads += 1;
-                let expected = (t0.elapsed().as_secs_f64() * SAMPLE_RATE as f64) as i64;
-                let lag = expected - (delivered + samples) as i64;
-                let block = (BLOCK_BYTES / 2) as i64;
-                if settled_reads.is_multiple_of(4800) {
-                    min_lag = i64::MAX; // re-learn the baseline every ten minutes of settled reads
-                }
-                if lag < min_lag {
-                    min_lag = lag;
-                }
-                if lag > min_lag + block {
-                    behind_for += 1;
-                    if behind_for >= 4 {
-                        let gap = (lag - min_lag) as u64;
-                        clock += gap;
-                        delivered += gap;
-                        gaps += 1;
-                        behind_for = 0;
-                        eprintln!(
-                            "rx: sample gap of {:.1} ms accounted (gap {})",
-                            gap as f64 / SAMPLE_RATE as f64 * 1e3,
-                            gaps
-                        );
-                    }
-                } else {
-                    behind_for = 0;
-                }
+            if (samples as usize) < BLOCK_BYTES / 2 {
+                short_reads += 1;
+            }
+            if short_reads > 0 && last_short_report.elapsed() >= Duration::from_secs(60) {
+                eprintln!("rx: {short_reads} short reads in the last minute");
+                short_reads = 0;
+                last_short_report = Instant::now();
             }
             let first = clock;
             clock += samples;
