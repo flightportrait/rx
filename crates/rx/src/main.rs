@@ -67,6 +67,9 @@ struct Args {
     /// Report every second instead of every minute.
     #[arg(long, default_value_t = false)]
     verbose: bool,
+    /// Log the sample clock on every settled read (lag, baseline, read time).
+    #[arg(long, default_value_t = false, hide = true)]
+    clock_debug: bool,
     /// Beast server address ("" = none).
     #[arg(long, default_value = "0.0.0.0:30005")]
     beast_listen: String,
@@ -312,7 +315,24 @@ fn main() -> Result<()> {
             };
             buf.truncate(n & !1);
             let samples = (buf.len() / 2) as u64;
-            let settled = read_started.elapsed() >= block_time.mul_f64(0.8);
+            let read_took = read_started.elapsed();
+            let settled = read_took >= block_time.mul_f64(0.8);
+            if clock_debug {
+                let expected = (t0.elapsed().as_secs_f64() * SAMPLE_RATE as f64) as i64;
+                let lag = expected - (delivered + samples) as i64;
+                eprintln!(
+                    "rx: clock read {:.1} ms {} lag {:.1} ms baseline {:.1} ms samples {}",
+                    read_took.as_secs_f64() * 1e3,
+                    if settled { "settled" } else { "backlog" },
+                    lag as f64 / SAMPLE_RATE as f64 * 1e3,
+                    if min_lag == i64::MAX {
+                        f64::NAN
+                    } else {
+                        min_lag as f64 / SAMPLE_RATE as f64 * 1e3
+                    },
+                    samples
+                );
+            }
             if settled {
                 settled_reads += 1;
                 let expected = (t0.elapsed().as_secs_f64() * SAMPLE_RATE as f64) as i64;
