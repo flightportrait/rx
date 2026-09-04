@@ -730,9 +730,13 @@ impl Demodulator {
             // Only frames that look like collisions: energy in the preamble
             // gaps, or bits that needed repair.
             let gap_hot = self.p.cancel_gap_ratio > 0.0 && f.gap >= self.p.cancel_gap_ratio * self.block_mean;
+            // A pulse leaks about a third of its level into the neighbouring
+            // empty half-bit (measured envelope), so the expected empty-half
+            // level of a lone frame is the noise floor plus that leakage.
+            let expected_off = self.block_mean + 0.35 * f.signal;
             let off_hot = self.p.cancel_off_ratio > 0.0
                 && f.off_ratio >= self.p.cancel_off_ratio
-                && f.off_level >= self.p.cancel_gap_ratio.max(1.0) * self.block_mean;
+                && f.off_level >= self.p.cancel_gap_ratio.max(1.0) * expected_off;
             let all = self.p.cancel_gap_ratio == 0.0 && self.p.cancel_off_ratio == 0.0;
             if f.fixed == 0 && !gap_hot && !off_hot && !all {
                 continue;
