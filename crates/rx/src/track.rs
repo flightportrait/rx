@@ -185,6 +185,12 @@ impl Tracker {
     /// taken only when the aircraft has no ADS-B position younger than
     /// 30 s. Never counted as a message the aircraft sent.
     pub fn offer_mlat(&mut self, bytes: &[u8], now: f64) {
+        // MLAT results are DF18 with CF=2 (first byte 0x92), as mlat-client
+        // and mlatc emit them; anything else with the magic timestamp is
+        // not a result.
+        if bytes.first() != Some(&0x92) {
+            return;
+        }
         let Some(p) = parse_airborne(bytes) else {
             return;
         };
