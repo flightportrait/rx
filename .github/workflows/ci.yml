@@ -1,0 +1,22 @@
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+# rx links librtlsdr dynamically, so the build needs the library's
+# development package; the Debian container matches the one releases
+# are built in.
+jobs:
+  rust:
+    runs-on: ubuntu-latest
+    container: rust:slim
+    steps:
+      - uses: actions/checkout@v4
+      - run: apt-get update -qq && apt-get install -y -qq --no-install-recommends librtlsdr-dev libusb-1.0-0-dev pkg-config git >/dev/null
+      - run: rustup component add rustfmt clippy
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo fmt --check
+      - run: cargo clippy --workspace --all-targets -- -D warnings
+      - run: cargo test --workspace

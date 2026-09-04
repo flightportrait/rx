@@ -1,0 +1,40 @@
+name: release
+
+on:
+  push:
+    tags: ["v*"]
+
+# rx links librtlsdr dynamically, so each target needs that library for
+# its architecture. The arm64 build cross-compiles in the same Debian
+# container recipe the project builds with on its own machines.
+jobs:
+  binaries:
+    runs-on: ubuntu-latest
+    container: rust:slim
+    permissions:
+      contents: write
+    strategy:
+      matrix:
+        include:
+          - target: x86_64-unknown-linux-gnu
+            packages: librtlsdr-dev libusb-1.0-0-dev
+          - target: aarch64-unknown-linux-gnu
+            packages: gcc-aarch64-linux-gnu libc6-dev-arm64-cross librtlsdr-dev:arm64 libusb-1.0-0-dev:arm64
+    steps:
+      - uses: actions/checkout@v4
+      - run: |
+          if [ "${{ matrix.target }}" = aarch64-unknown-linux-gnu ]; then dpkg --add-architecture arm64; fi
+          apt-get update -qq
+          apt-get install -y -qq --no-install-recommends pkg-config git ${{ matrix.packages }} >/dev/null
+          rustup target add ${{ matrix.target }}
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo build --release --target ${{ matrix.target }} -p rx
+        env:
+          CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_LINKER: aarch64-linux-gnu-gcc
+          PKG_CONFIG_ALLOW_CROSS: "1"
+      - run: |
+          mkdir out
+          cp target/${{ matrix.target }}/release/rx out/rx-${{ matrix.target }}
+      - uses: softprops/action-gh-release@v2
+        with:
+          files: out/*
