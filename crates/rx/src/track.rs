@@ -10,7 +10,6 @@ use std::io::Write;
 
 pub struct Aircraft {
     pub hex: u32,
-    pub first_seen: f64,
     pub last_seen: f64,
     pub messages: u64,
     /// Last signal level (raw magnitude units).
@@ -97,7 +96,6 @@ impl Tracker {
                 }
                 let a = self.aircraft.entry(hex).or_insert_with(|| Aircraft {
                     hex,
-                    first_seen: now,
                     last_seen: now,
                     messages: 0,
                     signal,
@@ -125,7 +123,6 @@ impl Tracker {
         }
         let a = self.aircraft.entry(hex).or_insert_with(|| Aircraft {
             hex,
-            first_seen: now,
             last_seen: now,
             messages: 0,
             signal,

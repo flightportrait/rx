@@ -8,6 +8,7 @@
 //! accounts a gap when the dongle falls behind by more than a block.
 
 mod beast;
+mod reduce;
 mod sdr;
 mod track;
 
@@ -49,9 +50,15 @@ struct Args {
     /// Beast server address ("" = none).
     #[arg(long, default_value = "0.0.0.0:30005")]
     beast_listen: String,
-    /// Push the Beast stream to host:port (repeatable).
+    /// Outbound connector, readsb's form: host,port,protocol[,uuid=...];
+    /// protocol is beast_out, beast_reduce_out or beast_reduce_plus_out.
+    /// Repeatable.
     #[arg(long)]
-    beast_connect: Vec<String>,
+    net_connector: Vec<String>,
+    /// Reduced-stream interval, milliseconds (readsb's default 250; the
+    /// aggregators are happy with 500).
+    #[arg(long, default_value_t = 500)]
+    reduce_interval: u64,
     /// Write aircraft.json into this directory every second.
     #[arg(long)]
     write_json: Option<String>,
@@ -128,9 +135,22 @@ fn main() -> Result<()> {
         hub.serve(&a.beast_listen)?;
         eprintln!("rx: Beast server on {}", a.beast_listen);
     }
-    for c in &a.beast_connect {
-        hub.connect(c.clone());
+    for c in &a.net_connector {
+        let parts: Vec<&str> = c.split(',').map(|p| p.trim()).collect();
+        anyhow::ensure!(parts.len() >= 3, "--net-connector wants host,port,protocol[,uuid=...]: {c}");
+        let (stream, plus) = match parts[2] {
+            "beast_out" => (beast::Stream::Full, false),
+            "beast_reduce_out" => (beast::Stream::Reduced, false),
+            "beast_reduce_plus_out" => (beast::Stream::Reduced, true),
+            other => anyhow::bail!("unknown connector protocol {other} in {c}"),
+        };
+        let uuid = parts.iter().skip(3).find_map(|p| p.strip_prefix("uuid=")).map(str::to_string);
+        if plus && uuid.is_none() {
+            eprintln!("rx: {c}: beast_reduce_plus_out without uuid=; the aggregator will assign a random identity");
+        }
+        hub.connect(format!("{}:{}", parts[0], parts[1]), stream, uuid);
     }
+    let mut reducer = reduce::Reducer::new(a.reduce_interval);
     let mut rec = match &a.record {
         Some(p) => Some(std::io::BufWriter::new(std::fs::File::create(p)?)),
         None => None,
@@ -179,7 +199,9 @@ fn main() -> Result<()> {
             lut.magnitudes(&blk.bytes, &mut mag);
         }
         let mut chunk = Vec::new();
+        let mut reduced = Vec::new();
         let now = wall();
+        let now_ms = (now * 1000.0) as u64;
         for f in d.run_iq(&mut mag, &mut raw, base, &remag) {
             let level = f.signal / iq::MAG_SCALE;
             if let track::Verdict::Reject = tracker.offer(&f.bytes, level, f.fixed, now) {
@@ -195,9 +217,15 @@ fn main() -> Result<()> {
             let ticks = (f.start * 5.0).round() as u64;
             let signal = ((f.signal / iq::MAG_SCALE) * 1.4).clamp(0.0, 255.0) as u8;
             beast::encode(&f.bytes, ticks, signal, &mut chunk);
+            if reducer.forward(&f.bytes, now_ms) {
+                beast::encode(&f.bytes, ticks, signal, &mut reduced);
+            }
         }
         if !chunk.is_empty() {
-            hub.publish(chunk);
+            hub.publish(beast::Stream::Full, chunk);
+        }
+        if !reduced.is_empty() {
+            hub.publish(beast::Stream::Reduced, reduced);
         }
         let keep = mag.len().saturating_sub(TAIL);
         base += keep as u64;
