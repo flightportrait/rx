@@ -9,6 +9,7 @@
 
 mod beast;
 mod sdr;
+mod track;
 
 use anyhow::Result;
 use clap::Parser;
@@ -51,6 +52,14 @@ struct Args {
     /// Push the Beast stream to host:port (repeatable).
     #[arg(long)]
     beast_connect: Vec<String>,
+    /// Write aircraft.json into this directory every second.
+    #[arg(long)]
+    write_json: Option<String>,
+    /// Receiver position, for range figures.
+    #[arg(long, default_value_t = 0.0)]
+    lat: f64,
+    #[arg(long, default_value_t = 0.0)]
+    lon: f64,
 }
 
 /// A block of samples with the stream index of its first sample.
@@ -143,6 +152,12 @@ fn main() -> Result<()> {
     };
     let started = Instant::now();
     let mut last_report = Instant::now();
+    let mut tracker = track::Tracker::new(a.lat, a.lon);
+    let json_dir = a.write_json.as_ref().map(std::path::PathBuf::from);
+    if let Some(d) = &json_dir {
+        std::fs::create_dir_all(d)?;
+    }
+    let wall = || std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_secs_f64();
     let (mut frames_1s, mut frames_total, mut aircraft): (u64, u64, std::collections::HashSet<u32>) = (0, 0, Default::default());
     let mut expect_first: u64 = 0;
     for blk in rx.iter() {
@@ -164,7 +179,12 @@ fn main() -> Result<()> {
             lut.magnitudes(&blk.bytes, &mut mag);
         }
         let mut chunk = Vec::new();
+        let now = wall();
         for f in d.run_iq(&mut mag, &mut raw, base, &remag) {
+            let level = f.signal / iq::MAG_SCALE;
+            if let track::Verdict::Reject = tracker.offer(&f.bytes, level, f.fixed, now) {
+                continue;
+            }
             frames_1s += 1;
             frames_total += 1;
             if f.bytes.len() == 14 && matches!(f.bytes[0] >> 3, 17 | 18) {
@@ -184,11 +204,20 @@ fn main() -> Result<()> {
         mag.drain(..keep);
         raw.drain(..2 * keep);
         if last_report.elapsed() >= Duration::from_secs(1) {
+            let now = wall();
+            tracker.expire(now, 60.0);
+            if let Some(dir) = &json_dir {
+                if let Err(e) = tracker.write_json(dir, now) {
+                    eprintln!("rx: aircraft.json: {e}");
+                }
+            }
             eprintln!(
-                "rx: {frames_1s} frames/s, {frames_total} total, {} aircraft, {} cancellations, {} rescued, {} consumers",
+                "rx: {frames_1s} frames/s, {frames_total} total, {} aircraft ({} tracked), {} cancellations, {} rescued, {} rejected repairs, {} consumers",
                 aircraft.len(),
+                tracker.aircraft.len(),
                 d.stats.cancelled,
                 d.stats.rescan_frames,
+                tracker.rejected,
                 hub.consumers()
             );
             frames_1s = 0;

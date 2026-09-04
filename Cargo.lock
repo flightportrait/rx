@@ -291,6 +291,7 @@ dependencies = [
  "clap",
  "demod",
  "iq",
+ "mb-modes",
 ]
 
 [[package]]

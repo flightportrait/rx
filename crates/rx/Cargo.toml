@@ -8,5 +8,6 @@ license.workspace = true
 [dependencies]
 iq.workspace = true
 demod.workspace = true
+mb-modes.workspace = true
 anyhow.workspace = true
 clap.workspace = true

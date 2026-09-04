@@ -176,11 +176,6 @@ fn energy(m: &[u16], a: f64, b: f64) -> f32 {
 /// Energy over the half-bit interval starting at `fa` fifths of a sample,
 /// 6 fifths long, in fifths: three samples with integer weights set by the
 /// phase. Same integral as `energy`, no loop, no float.
-#[inline(always)]
-fn half_bit_fifths(m: &[u16], fa: i64) -> i32 {
-    half_bit_at(m, (fa / 5) as usize, (fa % 5) as usize)
-}
-
 /// Weights (w0, w1) of the two samples under a half bit (6 fifths) starting
 /// at phase k fifths into sample i: [5-k, 1+k]. A third sample is never
 /// reached: k + 6 <= 10.
@@ -651,8 +646,6 @@ pub struct Demodulator {
     /// (syndrome, bit) sorted by syndrome, for single-bit lookup.
     syn56_sorted: Vec<(u32, usize)>,
     syn112_sorted: Vec<(u32, usize)>,
-    asyn56: Vec<u32>,
-    asyn112: Vec<u32>,
     /// (address syndrome, bit) sorted by syndrome, for the address repair.
     asyn56_sorted: Vec<(u32, usize)>,
     asyn112_sorted: Vec<(u32, usize)>,
@@ -692,8 +685,6 @@ impl Demodulator {
                 v.sort_unstable();
                 v
             },
-            asyn56: address_syndromes(56),
-            asyn112: address_syndromes(112),
             asyn56_sorted: {
                 let mut v: Vec<(u32, usize)> = address_syndromes(56).into_iter().enumerate().map(|(i, s)| (s, i)).collect();
                 v.sort_unstable();

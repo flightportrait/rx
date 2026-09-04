@@ -23,7 +23,6 @@ extern "C" {
     fn rtlsdr_set_tuner_gain_mode(dev: *mut RtlsdrDev, manual: c_int) -> c_int;
     fn rtlsdr_get_tuner_gains(dev: *mut RtlsdrDev, gains: *mut c_int) -> c_int;
     fn rtlsdr_set_tuner_gain(dev: *mut RtlsdrDev, gain: c_int) -> c_int;
-    fn rtlsdr_get_tuner_gain(dev: *mut RtlsdrDev) -> c_int;
     fn rtlsdr_set_agc_mode(dev: *mut RtlsdrDev, on: c_int) -> c_int;
     fn rtlsdr_set_bias_tee(dev: *mut RtlsdrDev, on: c_int) -> c_int;
     fn rtlsdr_reset_buffer(dev: *mut RtlsdrDev) -> c_int;
@@ -119,10 +118,6 @@ impl Device {
     pub fn set_agc(&mut self) -> Result<()> {
         check(unsafe { rtlsdr_set_tuner_gain_mode(self.dev, 0) }, "set_tuner_gain_mode")?;
         check(unsafe { rtlsdr_set_agc_mode(self.dev, 1) }, "set_agc_mode")
-    }
-
-    pub fn gain(&self) -> i32 {
-        unsafe { rtlsdr_get_tuner_gain(self.dev) }
     }
 
     /// Bias tee: 4.5 V on the antenna port for a powered LNA. Off unless
