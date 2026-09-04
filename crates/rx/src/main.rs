@@ -262,6 +262,7 @@ fn main() -> Result<()> {
 
     // Reader thread: blocks to the decoder, sample clock kept honest, gain
     // changes taken from the controller, the dongle reopened when lost.
+    let clock_debug = a.clock_debug;
     let (tx, rx) = mpsc::sync_channel::<Block>(16);
     let (gain_tx, gain_rx) = mpsc::channel::<i32>();
     let reader = std::thread::spawn(move || -> Result<()> {
