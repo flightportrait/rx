@@ -78,7 +78,10 @@ configured for readsb runs rx by changing the binary path.
   points its radio at rx (the readsb line kept in station.toml.readsb
   for a one-line revert); stationd, mlatc and the status page run
   unchanged on it. `--clip-dir` writes ten seconds of raw I/Q every ten
-  minutes for a nightly replay through readsb. Two weeks ahead with no
+  minutes; leserveur pulls the clips nightly (`~/shadow/shadow.sh`,
+  cron 03:17 UTC) and appends one line per clip to `~/shadow/shadow.log`
+  with CRC-valid and address-parity counts for rx and readsb, flagging
+  any aircraft only rx reported. Two weeks ahead with no
   false frames, then rx becomes the installer's default with readsb as
   fallback.
 
