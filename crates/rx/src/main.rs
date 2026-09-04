@@ -9,8 +9,10 @@
 
 mod beast;
 mod gain;
+mod beast_in;
 mod reduce;
 mod sdr;
+mod stats;
 mod track;
 
 use anyhow::Result;
@@ -69,10 +71,13 @@ struct Args {
     #[arg(long, default_value = "0.0.0.0:30005")]
     beast_listen: String,
     /// Outbound connector, readsb's form: host,port,protocol[,uuid=...];
-    /// protocol is beast_out, beast_reduce_out or beast_reduce_plus_out.
-    /// Repeatable.
+    /// protocol is beast_out, beast_reduce_out, beast_reduce_plus_out or
+    /// beast_in (pull a Beast stream in). Repeatable.
     #[arg(long)]
     net_connector: Vec<String>,
+    /// Beast input port (readsb's flag): MLAT results from mlatc arrive here.
+    #[arg(long)]
+    net_bi_port: Option<u16>,
     /// Reduced-stream interval, milliseconds (readsb's default 250; the
     /// aggregators are happy with 500).
     #[arg(long, default_value_t = 500)]
@@ -325,9 +330,18 @@ fn main() -> Result<()> {
         hub.serve(&listen)?;
         eprintln!("rx: Beast server on {listen}");
     }
+    let (in_tx, in_rx) = mpsc::channel::<beast_in::InFrame>();
+    if let Some(p) = a.net_bi_port {
+        beast_in::listen(&format!("0.0.0.0:{p}"), in_tx.clone())?;
+        eprintln!("rx: Beast input on 0.0.0.0:{p}");
+    }
     for c in &a.net_connector {
         let parts: Vec<&str> = c.split(',').map(|p| p.trim()).collect();
         anyhow::ensure!(parts.len() >= 3, "--net-connector wants host,port,protocol[,uuid=...]: {c}");
+        if parts[2] == "beast_in" {
+            beast_in::connect(format!("{}:{}", parts[0], parts[1]), in_tx.clone());
+            continue;
+        }
         let (stream, plus) = match parts[2] {
             "beast_out" => (beast::Stream::Full, false),
             "beast_reduce_out" => (beast::Stream::Reduced, false),
@@ -375,6 +389,8 @@ fn main() -> Result<()> {
         std::fs::create_dir_all(d)?;
     }
     let wall = || std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_secs_f64();
+    let gain_db = a.gain.parse::<f32>().ok();
+    let mut st = stats::Stats::new(wall(), gain_db);
     let (mut frames_1s, mut frames_total, mut aircraft): (u64, u64, std::collections::HashSet<u32>) = (0, 0, Default::default());
     let mut expect_first: u64 = 0;
     // Software gain: one window every 10 s of clipping, strong-frame
@@ -413,10 +429,14 @@ fn main() -> Result<()> {
         // A gap in the stream: the carried tail no longer touches the new
         // block, so start fresh at the new position.
         if blk.first_sample != expect_first {
+            if expect_first != 0 && blk.first_sample > expect_first {
+                st.dropped(blk.first_sample - expect_first);
+            }
             mag.clear();
             raw.clear();
             base = blk.first_sample;
         }
+        st.samples((blk.bytes.len() / 2) as u64);
         expect_first = blk.first_sample + (blk.bytes.len() / 2) as u64;
         raw.extend_from_slice(&blk.bytes);
         if cfg!(target_arch = "aarch64") {
@@ -433,10 +453,24 @@ fn main() -> Result<()> {
                 win_noise_n += 1;
             }
         }
+        if !mag.is_empty() {
+            let n = (blk.bytes.len() / 2).min(mag.len());
+            let sum: u64 = mag[mag.len() - n..].iter().map(|&x| x as u64).sum();
+            st.noise(sum as f32 / n as f32 / iq::MAG_SCALE);
+        }
         let mut chunk = Vec::new();
         let mut reduced = Vec::new();
         let now = wall();
         let now_ms = (now * 1000.0) as u64;
+        // Frames from Beast input: MLAT results go to the table as MLAT
+        // positions; everything received is forwarded on the full stream
+        // (as readsb does), never on the reduced one.
+        for f in in_rx.try_iter() {
+            if f.is_mlat() {
+                tracker.offer_mlat(&f.bytes, now);
+            }
+            beast::encode(&f.bytes, f.ts, f.signal, &mut chunk);
+        }
         for f in d.run_iq(&mut mag, &mut raw, base, &remag) {
             let level = f.signal / iq::MAG_SCALE;
             if let track::Verdict::Reject = tracker.offer(&f.bytes, level, f.fixed, now) {
@@ -444,6 +478,7 @@ fn main() -> Result<()> {
             }
             frames_1s += 1;
             frames_total += 1;
+            st.frame(level, f.fixed);
             if f.bytes.len() == 14 && matches!(f.bytes[0] >> 3, 17 | 18) {
                 aircraft.insert((f.bytes[1] as u32) << 16 | (f.bytes[2] as u32) << 8 | f.bytes[3] as u32);
             }
@@ -479,6 +514,7 @@ fn main() -> Result<()> {
             }
             report_ticks += 1;
             if a.verbose || report_ticks % 60 == 0 {
+            st.tick(now, json_dir.as_deref());
             eprintln!(
                 "rx: {frames_1s} frames/s, {frames_total} total, {} aircraft ({} tracked), {} cancellations, {} rescued, {} rejected repairs, {} consumers",
                 aircraft.len(),

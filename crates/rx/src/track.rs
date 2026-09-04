@@ -17,9 +17,59 @@ pub struct Aircraft {
     pub lat: Option<f64>,
     pub lon: Option<f64>,
     pub pos_time: f64,
+    /// The current position came from MLAT results, not from the aircraft.
+    pub pos_mlat: bool,
     pub alt_ft: Option<i32>,
     even: Option<(f64, u32, u32)>,
     odd: Option<(f64, u32, u32)>,
+    /// CPR pair store for MLAT result frames, kept apart from ADS-B.
+    mlat_even: Option<(f64, u32, u32)>,
+    mlat_odd: Option<(f64, u32, u32)>,
+}
+
+impl Aircraft {
+    fn new(hex: u32, now: f64, signal: f32) -> Self {
+        Aircraft {
+            hex,
+            last_seen: now,
+            messages: 0,
+            signal,
+            lat: None,
+            lon: None,
+            pos_time: 0.0,
+            pos_mlat: false,
+            alt_ft: None,
+            even: None,
+            odd: None,
+            mlat_even: None,
+            mlat_odd: None,
+        }
+    }
+}
+
+/// An airborne position message of DF17 or DF18 (TC 9..18), CRC checked.
+struct Airborne {
+    odd: bool,
+    cpr_lat: u32,
+    cpr_lon: u32,
+    alt_ft: Option<i32>,
+}
+
+fn parse_airborne(f: &[u8]) -> Option<Airborne> {
+    if f.len() != 14 || !matches!(f[0] >> 3, 17 | 18) || mb_modes::crc24(f) != 0 {
+        return None;
+    }
+    let me = u64::from_be_bytes([0, f[4], f[5], f[6], f[7], f[8], f[9], f[10]]);
+    let tc = ((me >> 51) & 0x1F) as u8;
+    if !(9..=18).contains(&tc) {
+        return None;
+    }
+    Some(Airborne {
+        odd: (me >> 34) & 1 == 1,
+        cpr_lat: ((me >> 17) & 0x1FFFF) as u32,
+        cpr_lon: (me & 0x1FFFF) as u32,
+        alt_ft: mb_modes::alt_ac12_decode(((me >> 36) & 0xFFF) as u16),
+    })
 }
 
 pub struct Tracker {
@@ -94,18 +144,7 @@ impl Tracker {
                         }
                     }
                 }
-                let a = self.aircraft.entry(hex).or_insert_with(|| Aircraft {
-                    hex,
-                    last_seen: now,
-                    messages: 0,
-                    signal,
-                    lat: None,
-                    lon: None,
-                    pos_time: 0.0,
-                    alt_ft: None,
-                    even: None,
-                    odd: None,
-                });
+                let a = self.aircraft.entry(hex).or_insert_with(|| Aircraft::new(hex, now, signal));
                 if p.odd {
                     a.odd = Some(mine);
                 } else {
@@ -115,29 +154,54 @@ impl Tracker {
                     a.lat = Some(lat);
                     a.lon = Some(lon);
                     a.pos_time = now;
+                    a.pos_mlat = false;
                     if alt.is_some() {
                         a.alt_ft = alt;
                     }
                 }
             }
         }
-        let a = self.aircraft.entry(hex).or_insert_with(|| Aircraft {
-            hex,
-            last_seen: now,
-            messages: 0,
-            signal,
-            lat: None,
-            lon: None,
-            pos_time: 0.0,
-            alt_ft: None,
-            even: None,
-            odd: None,
-        });
+        let a = self.aircraft.entry(hex).or_insert_with(|| Aircraft::new(hex, now, signal));
         a.last_seen = now;
         a.messages += 1;
         a.signal = signal;
         self.messages += 1;
         Verdict::Accept
+    }
+
+    /// An MLAT result frame from Beast input (DF18 pair with the magic
+    /// timestamp). Decoded through its own CPR pair store; the position is
+    /// taken only when the aircraft has no ADS-B position younger than
+    /// 30 s. Never counted as a message the aircraft sent.
+    pub fn offer_mlat(&mut self, bytes: &[u8], now: f64) {
+        let Some(p) = parse_airborne(bytes) else { return };
+        let hex = (bytes[1] as u32) << 16 | (bytes[2] as u32) << 8 | bytes[3] as u32;
+        let a = self.aircraft.entry(hex).or_insert_with(|| Aircraft::new(hex, now, 0.0));
+        let mine = (now, p.cpr_lat, p.cpr_lon);
+        let partner = if p.odd { a.mlat_even } else { a.mlat_odd };
+        if p.odd {
+            a.mlat_odd = Some(mine);
+        } else {
+            a.mlat_even = Some(mine);
+        }
+        let Some((t, la, lo)) = partner else { return };
+        if now - t >= 10.0 {
+            return;
+        }
+        let (e, o) = if p.odd { ((la, lo), (p.cpr_lat, p.cpr_lon)) } else { ((p.cpr_lat, p.cpr_lon), (la, lo)) };
+        let Some((lat, lon)) = mb_modes::cpr::global_decode_airborne(e, o, p.odd) else { return };
+        let adsb_fresh = !a.pos_mlat && a.lat.is_some() && now - a.pos_time < 30.0;
+        if adsb_fresh {
+            return;
+        }
+        a.lat = Some(lat);
+        a.lon = Some(lon);
+        a.pos_time = now;
+        a.pos_mlat = true;
+        if a.alt_ft.is_none() {
+            a.alt_ft = p.alt_ft;
+        }
+        a.last_seen = a.last_seen.max(now);
     }
 
     /// Drop aircraft silent for more than `ttl` seconds.
@@ -166,6 +230,9 @@ impl Tracker {
             ));
             if let (Some(lat), Some(lon)) = (a.lat, a.lon) {
                 s.push_str(&format!(",\"lat\":{lat:.6},\"lon\":{lon:.6},\"seen_pos\":{:.1},\"r_dst\":{:.1}", now - a.pos_time, haversine_m(self.lat, self.lon, lat, lon) / 1852.0));
+                if a.pos_mlat {
+                    s.push_str(",\"mlat\":[\"lat\",\"lon\"]");
+                }
             }
             if let Some(alt) = a.alt_ft {
                 s.push_str(&format!(",\"alt_baro\":{alt}"));
