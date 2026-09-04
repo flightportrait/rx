@@ -74,9 +74,18 @@ configured for readsb runs rx by changing the binary path.
 - R3 aircraft table and the consistency check: done in code; the zero
   inconsistent repaired positions live is the acceptance test.
 - R4 aircraft.json for stationd: done.
-- R5 shadow and swap: rx on the Pi with periodic raw recordings replayed
-  through readsb nightly; two weeks ahead with no false frames, then rx
-  becomes the installer's default with readsb as fallback.
+- R5 shadow and swap: started 2026-09-05. The Pi station's config
+  points its radio at rx (the readsb line kept in station.toml.readsb
+  for a one-line revert); stationd, mlatc and the status page run
+  unchanged on it. `--clip-dir` writes ten seconds of raw I/Q every ten
+  minutes for a nightly replay through readsb. Two weeks ahead with no
+  false frames, then rx becomes the installer's default with readsb as
+  fallback.
+
+Timestamp integrity, 2026-09-05: three minutes recorded while the live
+Beast stream was collected; every one of the 476 live frames matched
+the offline replay with a clock offset of exactly zero ticks from start
+to end.
 
 Not in scope: Mode A/C, 978 MHz, other SDRs, the web map, history,
 graphs, the aircraft database.

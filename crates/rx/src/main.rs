@@ -41,6 +41,18 @@ struct Args {
     /// Write raw I/Q to this file (UC8) as well.
     #[arg(long)]
     record: Option<String>,
+    /// Shadow recordings: every `clip_every` seconds, write `clip_seconds`
+    /// of raw I/Q into this directory (UC8, named by UTC time), keeping the
+    /// newest `clip_keep` files. A nightly replay through readsb scores the
+    /// live radio against it.
+    #[arg(long)]
+    clip_dir: Option<String>,
+    #[arg(long, default_value_t = 600)]
+    clip_every: u64,
+    #[arg(long, default_value_t = 10)]
+    clip_seconds: u64,
+    #[arg(long, default_value_t = 144)]
+    clip_keep: usize,
     /// Stop after this many seconds (0 = run until killed).
     #[arg(long, default_value_t = 0)]
     seconds: u64,
@@ -91,6 +103,37 @@ struct Args {
 struct Block {
     first_sample: u64,
     bytes: Vec<u8>,
+}
+
+/// UTC name for a clip: YYYYMMDDTHHMMSSZ from a unix time, no libraries.
+fn unix_utc_name(t: f64) -> String {
+    let secs = t as i64;
+    let days = secs.div_euclid(86_400);
+    let rem = secs.rem_euclid(86_400);
+    // civil from days (Howard Hinnant's algorithm)
+    let z = days + 719_468;
+    let era = z.div_euclid(146_097);
+    let doe = z - era * 146_097;
+    let yoe = (doe - doe / 1460 + doe / 36_524 - doe / 146_096) / 365;
+    let y = yoe + era * 400;
+    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
+    let mp = (5 * doy + 2) / 153;
+    let d = doy - (153 * mp + 2) / 5 + 1;
+    let m = if mp < 10 { mp + 3 } else { mp - 9 };
+    let y = if m <= 2 { y + 1 } else { y };
+    format!("{y:04}{m:02}{d:02}T{:02}{:02}{:02}Z", rem / 3600, (rem % 3600) / 60, rem % 60)
+}
+
+/// Keep the newest `keep` clips in `dir`.
+fn prune_clips(dir: &std::path::Path, keep: usize) {
+    let mut names: Vec<String> = std::fs::read_dir(dir)
+        .map(|it| it.filter_map(|e| e.ok()).map(|e| e.file_name().to_string_lossy().into_owned()).filter(|n| n.ends_with(".cu8")).collect())
+        .unwrap_or_default();
+    names.sort();
+    while names.len() > keep {
+        let old = names.remove(0);
+        let _ = std::fs::remove_file(dir.join(old));
+    }
 }
 
 fn main() -> Result<()> {
@@ -199,6 +242,12 @@ fn main() -> Result<()> {
         Some(p) => Some(std::io::BufWriter::new(std::fs::File::create(p)?)),
         None => None,
     };
+    let clip_dir = a.clip_dir.as_ref().map(std::path::PathBuf::from);
+    if let Some(d) = &clip_dir {
+        std::fs::create_dir_all(d)?;
+    }
+    let mut clip: Option<(std::io::BufWriter<std::fs::File>, u64)> = None; // writer, samples left
+    let mut next_clip = Instant::now();
     let lut = iq::MagLut::new();
     let mut d = demod::Demodulator::new(demod::Params::default());
     const TAIL: usize = 400;
@@ -227,6 +276,25 @@ fn main() -> Result<()> {
     for blk in rx.iter() {
         if let Some(w) = rec.as_mut() {
             w.write_all(&blk.bytes)?;
+        }
+        if let Some(dir) = &clip_dir {
+            if clip.is_none() && Instant::now() >= next_clip {
+                let name = format!("{}.cu8", unix_utc_name(wall()));
+                match std::fs::File::create(dir.join(&name)) {
+                    Ok(f) => clip = Some((std::io::BufWriter::new(f), a.clip_seconds * SAMPLE_RATE as u64)),
+                    Err(e) => eprintln!("rx: clip: {e}"),
+                }
+                next_clip = Instant::now() + Duration::from_secs(a.clip_every);
+                prune_clips(dir, a.clip_keep);
+            }
+            if let Some((w, left)) = clip.as_mut() {
+                let take = (*left as usize * 2).min(blk.bytes.len());
+                w.write_all(&blk.bytes[..take])?;
+                *left -= (take / 2) as u64;
+                if *left == 0 {
+                    clip = None;
+                }
+            }
         }
         // A gap in the stream: the carried tail no longer touches the new
         // block, so start fresh at the new position.
