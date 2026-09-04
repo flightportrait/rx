@@ -146,9 +146,11 @@ fn main() -> Result<()> {
             if lag < min_lag {
                 min_lag = lag;
             }
-            if lag > min_lag + block {
+            // Reads are block-sized, so the lag swings by a block on its
+            // own: a loss must exceed two blocks and persist two seconds.
+            if lag > min_lag + 2 * block {
                 behind_for += 1;
-                if behind_for >= 8 {
+                if behind_for >= 16 {
                     let gap = (lag - min_lag) as u64;
                     clock += gap;
                     delivered += gap;
