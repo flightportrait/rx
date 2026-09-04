@@ -58,8 +58,12 @@ configured for readsb runs rx by changing the binary path.
 
 - R0 dongle in, honest clock: done 2026-09-05 (30-minute soak on the Pi
   3B, no gaps).
-- R1 live decoder with Beast timestamps: done; readsb in network-only
-  mode builds a correct aircraft table from rx's stream.
+- R1 live decoder with Beast timestamps: done. readsb in network-only
+  mode builds a correct aircraft table from rx's stream, and rx live
+  matches the bench replaying the same ten minutes to within one frame
+  (3700 live, 3699 offline; readsb offline 1931 CRC-valid frames to
+  rx's 1990, address-parity 1542 to 1709, every repaired position
+  consistent with its track).
 - R2 Beast server, connectors, reduced stream, UUID hello: done; the
   hub and an aggregator accepting the station as a normal feeder is the
   acceptance test still to run.
