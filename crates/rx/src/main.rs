@@ -123,23 +123,33 @@ fn main() -> Result<()> {
         let mut delivered: u64 = 0; // samples delivered by the dongle
         let mut clock: u64 = 0; // stream index including accounted gaps
         let mut gaps: u64 = 0;
-        let mut behind_for: u32 = 0; // consecutive reads with the stream behind wall time
+        // The stream runs a steady latency behind wall time (the dongle's
+        // and the driver's buffers, about two blocks). Only a lag that grows
+        // beyond the smallest lag seen recently, and stays grown across
+        // eight reads, is a loss. Then the clock advances by the growth so
+        // the frames after it keep true timestamps.
+        let mut min_lag: i64 = i64::MAX;
+        let mut reads: u64 = 0;
+        let mut behind_for: u32 = 0;
         loop {
             let mut buf = vec![0u8; BLOCK_BYTES];
             let n = dev.read(&mut buf)?;
             buf.truncate(n & !1);
             let samples = (buf.len() / 2) as u64;
-            // Samples the wall clock says should have arrived. A shortfall
-            // that persists across eight reads is a loss (USB stall): the
-            // dongle buffers a stall shorter than that and catches up. A
-            // real loss is accounted by advancing the clock so the frames
-            // after it keep true timestamps.
-            let expected = (t0.elapsed().as_secs_f64() * SAMPLE_RATE as f64) as u64;
-            let block = (BLOCK_BYTES / 2) as u64;
-            if expected > delivered + samples + 2 * block {
+            reads += 1;
+            let expected = (t0.elapsed().as_secs_f64() * SAMPLE_RATE as f64) as i64;
+            let lag = expected - (delivered + samples) as i64;
+            let block = (BLOCK_BYTES / 2) as i64;
+            if reads % 4800 == 0 {
+                min_lag = i64::MAX; // re-learn the baseline every ten minutes
+            }
+            if lag < min_lag {
+                min_lag = lag;
+            }
+            if lag > min_lag + block {
                 behind_for += 1;
                 if behind_for >= 8 {
-                    let gap = expected - delivered - samples - block;
+                    let gap = (lag - min_lag) as u64;
                     clock += gap;
                     delivered += gap;
                     gaps += 1;

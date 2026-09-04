@@ -36,9 +36,10 @@ configured for readsb runs rx by changing the binary path.
 ## Behaviour
 
 - The sample counter is the clock. Every frame carries a 12 MHz Beast
-  timestamp derived from it; when the dongle falls behind wall time by
-  more than two read blocks, the gap is accounted so later timestamps
-  stay true. MLAT depends on this.
+  timestamp derived from it. The stream runs a steady latency behind
+  wall time; only a lag that grows beyond the smallest lag seen recently
+  and stays grown across eight reads is accounted as a loss, by
+  advancing the clock. MLAT depends on this.
 - Every emitted frame carries its repaired-bit count internally; a
   repaired position message that contradicts the aircraft's track (more
   than 400 m/s of travel plus 2 km from its last position) is rejected
@@ -64,9 +65,12 @@ configured for readsb runs rx by changing the binary path.
   (3700 live, 3699 offline; readsb offline 1931 CRC-valid frames to
   rx's 1990, address-parity 1542 to 1709, every repaired position
   consistent with its track).
-- R2 Beast server, connectors, reduced stream, UUID hello: done; the
-  hub and an aggregator accepting the station as a normal feeder is the
-  acceptance test still to run.
+- R2 Beast server, connectors, reduced stream, UUID hello: done and
+  accepted 2026-09-05. rx on the Pi fed feed.flightportrait.com over a
+  `beast_reduce_plus_out` connector with a fresh UUID; the hub took the
+  connection, and the public API listed the station online under the
+  id derived from that UUID (fp-1a9a5a0e4e). rx at 17 % of a Pi 3B core
+  and 6 MB resident with every frame cancelled.
 - R3 aircraft table and the consistency check: done in code; the zero
   inconsistent repaired positions live is the acceptance test.
 - R4 aircraft.json for stationd: done.
