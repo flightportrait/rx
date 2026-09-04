@@ -512,9 +512,9 @@ fn main() -> Result<()> {
                     eprintln!("rx: aircraft.json: {e}");
                 }
             }
+            st.tick(now, json_dir.as_deref());
             report_ticks += 1;
             if a.verbose || report_ticks % 60 == 0 {
-            st.tick(now, json_dir.as_deref());
             eprintln!(
                 "rx: {frames_1s} frames/s, {frames_total} total, {} aircraft ({} tracked), {} cancellations, {} rescued, {} rejected repairs, {} consumers",
                 aircraft.len(),
