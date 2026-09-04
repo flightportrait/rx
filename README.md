@@ -35,11 +35,27 @@ configured for readsb runs rx by changing the binary path.
 
 ## Behaviour
 
-- The sample counter is the clock. Every frame carries a 12 MHz Beast
-  timestamp derived from it. The stream runs a steady latency behind
-  wall time; only a lag that grows beyond the smallest lag seen recently
-  and stays grown across eight reads is accounted as a loss, by
-  advancing the clock. MLAT depends on this.
+- The clock is the count of delivered samples, as in readsb, and every
+  frame carries a 12 MHz Beast timestamp derived from it. It is not
+  corrected from wall time: on a Pi 3B the stream drifts against the
+  wall clock by half a percent, far beyond any crystal error, and three
+  attempts at a wall-clock correction only injected false jumps
+  (2026-09-05, see the commit history). A real USB loss is a
+  discontinuity MLAT servers detect as a clock reset; short reads are
+  counted and reported once a minute.
+- Gain: `--gain <dB>` fixed, `--gain agc` the hardware AGC, `--gain auto`
+  rx's own loop: every 10 s it looks at clipped samples and the noise
+  floor and moves the tuner one step, only when two windows agree, then
+  holds 20 s.
+- A dongle that disappears, or is absent at boot, is reopened every 2 s
+  (backoff to 10 s) with its settings restored; the outage advances the
+  clock by wall time, which MLAT sees as one reset.
+- Beast input (`--net-bi-port`, `beast_in` connectors): MLAT results
+  from mlatc reach the aircraft table as MLAT positions (never
+  overriding an ADS-B position younger than 30 s) and are forwarded on
+  the full stream, never on the reduced one.
+- `stats.json` beside aircraft.json every 10 s, readsb's shape for the
+  fields rx has.
 - Every emitted frame carries its repaired-bit count internally; a
   repaired position message that contradicts the aircraft's track (more
   than 400 m/s of travel plus 2 km from its last position) is rejected
@@ -54,6 +70,15 @@ configured for readsb runs rx by changing the binary path.
 - Every accepted frame is subtracted from the I/Q and its span rescanned
   for a frame underneath. On a real sky that is a few dozen fits a
   second.
+
+## In the station
+
+stationd runs rx in its `[programs].radio` slot with readsb as
+`[programs].readsb` fallback: three radio exits within ten minutes, or
+fifteen minutes of silence, hand the dongle to readsb with one sentence
+on the status page; crash fallbacks retry rx after an hour. Drilled
+2026-09-05 on the Pi: three kills, readsb up in seconds, rx back on the
+next restart.
 
 ## Plan
 
