@@ -300,8 +300,6 @@ fn main() -> Result<()> {
                     clock += gap;
                     delivered += gap;
                     gaps += 1;
-                    min_lag = i64::MAX;
-                    behind_for = 0;
                     eprintln!(
                         "rx: dongle back after {:.1} s (gap {})",
                         lost_at.elapsed().as_secs_f64(),
