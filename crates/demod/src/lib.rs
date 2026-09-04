@@ -142,8 +142,12 @@ impl Default for Params {
             phase_span: 2,
             pulse_uniformity: 0.0,
             cancel: true,
-            cancel_gap_ratio: 1.6,
-            cancel_off_ratio: 0.35,
+            // Both 0: every accepted frame is cancelled and its span rescanned.
+            // On a real sky that is a few dozen fits a second, a fraction of a
+            // percent of a Pi core; the triggers only ever paid on synthetic
+            // sets with a thousand collisions a second.
+            cancel_gap_ratio: 0.0,
+            cancel_off_ratio: 0.0,
             slicer: Slicer::Box,
             tap0: PULSE_TAP0,
         }
