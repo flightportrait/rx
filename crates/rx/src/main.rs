@@ -62,6 +62,9 @@ struct Args {
     /// List devices and exit.
     #[arg(long, default_value_t = false)]
     list: bool,
+    /// Report every second instead of every minute.
+    #[arg(long, default_value_t = false)]
+    verbose: bool,
     /// Beast server address ("" = none).
     #[arg(long, default_value = "0.0.0.0:30005")]
     beast_listen: String,
@@ -236,13 +239,17 @@ fn main() -> Result<()> {
         let mut clock: u64 = 0; // stream index including accounted gaps
         let mut gaps: u64 = 0;
         // The stream runs a steady latency behind wall time (the dongle's
-        // and the driver's buffers, about two blocks). Only a lag that grows
-        // beyond the smallest lag seen recently, and stays grown across
-        // eight reads, is a loss. Then the clock advances by the growth so
-        // the frames after it keep true timestamps.
+        // and the driver's buffers). The lag is only meaningful on a read
+        // that waited for the hardware: a read that returned at once was
+        // draining a backlog the decoder let build up, and its lag says
+        // nothing about loss. On settled reads, a lag grown by more than a
+        // block over the smallest settled lag seen recently, four times in
+        // a row, is a loss; the clock advances by the growth so the frames
+        // after it keep true timestamps.
         let mut min_lag: i64 = i64::MAX;
-        let mut reads: u64 = 0;
+        let mut settled_reads: u64 = 0;
         let mut behind_for: u32 = 0;
+        let block_time = Duration::from_secs_f64(BLOCK_BYTES as f64 / 2.0 / SAMPLE_RATE as f64);
         loop {
             while let Ok(t) = gain_rx.try_recv() {
                 match dev.set_gain(t) {
@@ -251,6 +258,7 @@ fn main() -> Result<()> {
                 }
             }
             let mut buf = vec![0u8; BLOCK_BYTES];
+            let read_started = Instant::now();
             let n = match dev.read(&mut buf) {
                 Ok(n) => n,
                 Err(e) => {
@@ -272,30 +280,31 @@ fn main() -> Result<()> {
             };
             buf.truncate(n & !1);
             let samples = (buf.len() / 2) as u64;
-            reads += 1;
-            let expected = (t0.elapsed().as_secs_f64() * SAMPLE_RATE as f64) as i64;
-            let lag = expected - (delivered + samples) as i64;
-            let block = (BLOCK_BYTES / 2) as i64;
-            if reads % 4800 == 0 {
-                min_lag = i64::MAX; // re-learn the baseline every ten minutes
-            }
-            if lag < min_lag {
-                min_lag = lag;
-            }
-            // Reads are block-sized, so the lag swings by a block on its
-            // own: a loss must exceed two blocks and persist two seconds.
-            if lag > min_lag + 2 * block {
-                behind_for += 1;
-                if behind_for >= 16 {
-                    let gap = (lag - min_lag) as u64;
-                    clock += gap;
-                    delivered += gap;
-                    gaps += 1;
-                    behind_for = 0;
-                    eprintln!("rx: sample gap of {:.1} ms accounted (gap {})", gap as f64 / SAMPLE_RATE as f64 * 1e3, gaps);
+            let settled = read_started.elapsed() >= block_time.mul_f64(0.8);
+            if settled {
+                settled_reads += 1;
+                let expected = (t0.elapsed().as_secs_f64() * SAMPLE_RATE as f64) as i64;
+                let lag = expected - (delivered + samples) as i64;
+                let block = (BLOCK_BYTES / 2) as i64;
+                if settled_reads % 4800 == 0 {
+                    min_lag = i64::MAX; // re-learn the baseline every ten minutes of settled reads
                 }
-            } else {
-                behind_for = 0;
+                if lag < min_lag {
+                    min_lag = lag;
+                }
+                if lag > min_lag + block {
+                    behind_for += 1;
+                    if behind_for >= 4 {
+                        let gap = (lag - min_lag) as u64;
+                        clock += gap;
+                        delivered += gap;
+                        gaps += 1;
+                        behind_for = 0;
+                        eprintln!("rx: sample gap of {:.1} ms accounted (gap {})", gap as f64 / SAMPLE_RATE as f64 * 1e3, gaps);
+                    }
+                } else {
+                    behind_for = 0;
+                }
             }
             let first = clock;
             clock += samples;
@@ -359,6 +368,7 @@ fn main() -> Result<()> {
     };
     let started = Instant::now();
     let mut last_report = Instant::now();
+    let mut report_ticks: u64 = 0;
     let mut tracker = track::Tracker::new(a.lat, a.lon);
     let json_dir = a.write_json.as_ref().map(std::path::PathBuf::from);
     if let Some(d) = &json_dir {
@@ -467,6 +477,8 @@ fn main() -> Result<()> {
                     eprintln!("rx: aircraft.json: {e}");
                 }
             }
+            report_ticks += 1;
+            if a.verbose || report_ticks % 60 == 0 {
             eprintln!(
                 "rx: {frames_1s} frames/s, {frames_total} total, {} aircraft ({} tracked), {} cancellations, {} rescued, {} rejected repairs, {} consumers",
                 aircraft.len(),
@@ -476,6 +488,7 @@ fn main() -> Result<()> {
                 tracker.rejected,
                 hub.consumers()
             );
+            }
             frames_1s = 0;
             last_report = Instant::now();
         }
