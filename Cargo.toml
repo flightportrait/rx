@@ -1,0 +1,18 @@
+[workspace]
+resolver = "2"
+members = ["crates/iq", "crates/demod", "crates/rx"]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+license = "AGPL-3.0-or-later"
+
+[workspace.dependencies]
+iq = { path = "crates/iq" }
+demod = { path = "crates/demod" }
+mb-modes = { git = "https://github.com/flightportrait/mlatc", tag = "v0.1.0" }
+anyhow = "1"
+clap = { version = "4", features = ["derive"] }
+
+[profile.release]
+debug = true

@@ -1,0 +1,9 @@
+[package]
+name = "demod"
+description = "Mode S demodulator for 2.4 MS/s magnitude streams"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+mb-modes.workspace = true

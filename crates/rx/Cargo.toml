@@ -1,0 +1,12 @@
+[package]
+name = "rx"
+description = "The Station radio: drives an RTL-SDR, demodulates Mode S, speaks Beast"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+iq.workspace = true
+demod.workspace = true
+anyhow.workspace = true
+clap.workspace = true
