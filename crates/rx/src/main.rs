@@ -123,22 +123,31 @@ fn main() -> Result<()> {
         let mut delivered: u64 = 0; // samples delivered by the dongle
         let mut clock: u64 = 0; // stream index including accounted gaps
         let mut gaps: u64 = 0;
+        let mut behind_for: u32 = 0; // consecutive reads with the stream behind wall time
         loop {
             let mut buf = vec![0u8; BLOCK_BYTES];
             let n = dev.read(&mut buf)?;
             buf.truncate(n & !1);
             let samples = (buf.len() / 2) as u64;
-            // Expected samples by wall time; a shortfall beyond one block is
-            // a gap the dongle dropped (USB stall). Advance the clock so the
-            // frames after it keep true timestamps.
+            // Samples the wall clock says should have arrived. A shortfall
+            // that persists across eight reads is a loss (USB stall): the
+            // dongle buffers a stall shorter than that and catches up. A
+            // real loss is accounted by advancing the clock so the frames
+            // after it keep true timestamps.
             let expected = (t0.elapsed().as_secs_f64() * SAMPLE_RATE as f64) as u64;
             let block = (BLOCK_BYTES / 2) as u64;
             if expected > delivered + samples + 2 * block {
-                let gap = expected - delivered - samples;
-                clock += gap;
-                delivered += gap;
-                gaps += 1;
-                eprintln!("rx: sample gap of {:.1} ms accounted (gap {})", gap as f64 / SAMPLE_RATE as f64 * 1e3, gaps);
+                behind_for += 1;
+                if behind_for >= 8 {
+                    let gap = expected - delivered - samples - block;
+                    clock += gap;
+                    delivered += gap;
+                    gaps += 1;
+                    behind_for = 0;
+                    eprintln!("rx: sample gap of {:.1} ms accounted (gap {})", gap as f64 / SAMPLE_RATE as f64 * 1e3, gaps);
+                }
+            } else {
+                behind_for = 0;
             }
             let first = clock;
             clock += samples;
