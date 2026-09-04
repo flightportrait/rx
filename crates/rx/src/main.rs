@@ -8,6 +8,7 @@
 //! accounts a gap when the dongle falls behind by more than a block.
 
 mod beast;
+mod gain;
 mod reduce;
 mod sdr;
 mod track;
@@ -32,7 +33,9 @@ struct Args {
     /// Device serial (overrides --device).
     #[arg(long)]
     serial: Option<String>,
-    /// Tuner gain in dB, or "agc" for the hardware AGC.
+    /// Tuner gain in dB, "auto" for the measured gain loop (starts at the
+    /// top step, moves one step per two agreeing 10 s windows), or "agc"
+    /// for the hardware AGC.
     #[arg(long, default_value = "49.6")]
     gain: String,
     /// Power the antenna port (bias tee). Only for a powered LNA.
@@ -99,10 +102,71 @@ struct Args {
     write_json_every: u32,
 }
 
-/// A block of samples with the stream index of its first sample.
+/// A block of samples with the stream index of its first sample and the
+/// count of samples at or near full scale.
 struct Block {
     first_sample: u64,
     bytes: Vec<u8>,
+    clipped: u32,
+}
+
+/// How the tuner is driven.
+#[derive(Clone, Copy)]
+enum GainMode {
+    /// Hardware AGC in tuner and demodulator.
+    Agc,
+    /// Manual, tenths of a dB.
+    Fixed(i32),
+}
+
+struct RadioCfg {
+    index: u32,
+    serial: Option<String>,
+    gain: GainMode,
+    bias_tee: bool,
+}
+
+/// Open the dongle and apply the configuration. Retries until a device
+/// answers, so a station that boots before its dongle enumerates, or
+/// loses it mid-run, comes back on its own.
+fn open_radio(cfg: &RadioCfg) -> sdr::Device {
+    let mut wait = 2u64;
+    loop {
+        match sdr::Device::open(cfg.index, cfg.serial.as_deref()).and_then(|mut dev| {
+            configure(&mut dev, cfg)?;
+            Ok(dev)
+        }) {
+            Ok(dev) => return dev,
+            Err(e) => {
+                eprintln!("rx: no dongle ({e}); retry in {wait} s");
+                std::thread::sleep(Duration::from_secs(wait));
+                wait = (wait + 2).min(10);
+            }
+        }
+    }
+}
+
+fn configure(dev: &mut sdr::Device, cfg: &RadioCfg) -> Result<()> {
+    dev.set_sample_rate(SAMPLE_RATE)?;
+    dev.set_center_freq(FREQ)?;
+    match cfg.gain {
+        GainMode::Agc => {
+            dev.set_agc()?;
+            eprintln!("rx: {} at {} MS/s, hardware AGC", dev.name, SAMPLE_RATE as f64 / 1e6);
+        }
+        GainMode::Fixed(t) => {
+            let got = dev.set_gain(t)?;
+            eprintln!("rx: {} at {} MS/s, gain {:.1} dB", dev.name, SAMPLE_RATE as f64 / 1e6, got as f32 / 10.0);
+        }
+    }
+    dev.set_bias_tee(cfg.bias_tee)?;
+    dev.reset_buffer()?;
+    Ok(())
+}
+
+/// Samples with I or Q at or near full scale (0..5 or 250..255).
+fn count_clipped(bytes: &[u8]) -> u32 {
+    bytes.iter().filter(|&&b| b >= 250 || b <= 5).count() as u32
 }
 
 /// UTC name for a clip: YYYYMMDDTHHMMSSZ from a unix time, no libraries.
@@ -145,22 +209,27 @@ fn main() -> Result<()> {
         return Ok(());
     }
     anyhow::ensure!(a.device_type == "rtlsdr", "only --device-type rtlsdr is supported (got {})", a.device_type);
-    let mut dev = sdr::Device::open(a.device, a.serial.as_deref())?;
-    dev.set_sample_rate(SAMPLE_RATE)?;
-    dev.set_center_freq(FREQ)?;
-    if a.gain == "agc" || a.gain == "auto" {
-        dev.set_agc()?;
-        eprintln!("rx: {} at {} MS/s, hardware AGC", dev.name, SAMPLE_RATE as f64 / 1e6);
+    let software_gain = a.gain == "auto";
+    let gain_mode = if a.gain == "agc" {
+        GainMode::Agc
+    } else if software_gain {
+        GainMode::Fixed(496) // the loop starts at the top and steps down on clipping
     } else {
-        let want = (a.gain.parse::<f32>()? * 10.0).round() as i32;
-        let got = dev.set_gain(want)?;
-        eprintln!("rx: {} at {} MS/s, gain {:.1} dB", dev.name, SAMPLE_RATE as f64 / 1e6, got as f32 / 10.0);
-    }
-    dev.set_bias_tee(a.bias_tee)?;
-    dev.reset_buffer()?;
+        GainMode::Fixed((a.gain.parse::<f32>()? * 10.0).round() as i32)
+    };
+    let mut cfg = RadioCfg {
+        index: a.device,
+        serial: a.serial.clone(),
+        gain: gain_mode,
+        bias_tee: a.bias_tee,
+    };
+    let mut dev = open_radio(&cfg);
+    let gain_steps = dev.gains.clone();
 
-    // Reader thread: blocks to the decoder, sample clock kept honest.
+    // Reader thread: blocks to the decoder, sample clock kept honest, gain
+    // changes taken from the controller, the dongle reopened when lost.
     let (tx, rx) = mpsc::sync_channel::<Block>(16);
+    let (gain_tx, gain_rx) = mpsc::channel::<i32>();
     let reader = std::thread::spawn(move || -> Result<()> {
         let t0 = Instant::now();
         let mut delivered: u64 = 0; // samples delivered by the dongle
@@ -175,8 +244,32 @@ fn main() -> Result<()> {
         let mut reads: u64 = 0;
         let mut behind_for: u32 = 0;
         loop {
+            while let Ok(t) = gain_rx.try_recv() {
+                match dev.set_gain(t) {
+                    Ok(got) => cfg.gain = GainMode::Fixed(got),
+                    Err(e) => eprintln!("rx: set gain: {e}"),
+                }
+            }
             let mut buf = vec![0u8; BLOCK_BYTES];
-            let n = dev.read(&mut buf)?;
+            let n = match dev.read(&mut buf) {
+                Ok(n) => n,
+                Err(e) => {
+                    // The outage is a gap: the clock advances by wall time so
+                    // the frames after the replug keep true timestamps.
+                    eprintln!("rx: dongle lost ({e}), reopening");
+                    let lost_at = Instant::now();
+                    drop(dev);
+                    dev = open_radio(&cfg);
+                    let gap = (lost_at.elapsed().as_secs_f64() * SAMPLE_RATE as f64) as u64;
+                    clock += gap;
+                    delivered += gap;
+                    gaps += 1;
+                    min_lag = i64::MAX;
+                    behind_for = 0;
+                    eprintln!("rx: dongle back after {:.1} s (gap {})", lost_at.elapsed().as_secs_f64(), gaps);
+                    continue;
+                }
+            };
             buf.truncate(n & !1);
             let samples = (buf.len() / 2) as u64;
             reads += 1;
@@ -207,7 +300,8 @@ fn main() -> Result<()> {
             let first = clock;
             clock += samples;
             delivered += samples;
-            if tx.send(Block { first_sample: first, bytes: buf }).is_err() {
+            let clipped = count_clipped(&buf);
+            if tx.send(Block { first_sample: first, bytes: buf, clipped }).is_err() {
                 return Ok(());
             }
         }
@@ -273,7 +367,17 @@ fn main() -> Result<()> {
     let wall = || std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_secs_f64();
     let (mut frames_1s, mut frames_total, mut aircraft): (u64, u64, std::collections::HashSet<u32>) = (0, 0, Default::default());
     let mut expect_first: u64 = 0;
+    // Software gain: one window every 10 s of clipping, strong-frame
+    // clipping and the noise floor (mean magnitude of a slice of every
+    // block), decided by the controller, applied by the reader.
+    let mut gainer = software_gain.then(|| gain::Controller::new(gain_steps.clone(), 496));
+    let (mut win_samples, mut win_clipped, mut win_strong, mut win_noise, mut win_noise_n): (u64, u64, bool, f64, u64) = (0, 0, false, 0.0, 0);
+    let mut win_start = Instant::now();
     for blk in rx.iter() {
+        if gainer.is_some() {
+            win_samples += (blk.bytes.len() / 2) as u64;
+            win_clipped += blk.clipped as u64;
+        }
         if let Some(w) = rec.as_mut() {
             w.write_all(&blk.bytes)?;
         }
@@ -310,6 +414,15 @@ fn main() -> Result<()> {
         } else {
             lut.magnitudes(&blk.bytes, &mut mag);
         }
+        if gainer.is_some() {
+            // noise floor: mean magnitude of the newest 4096 samples
+            let n = mag.len();
+            let slice = &mag[n.saturating_sub(4096)..];
+            if !slice.is_empty() {
+                win_noise += slice.iter().map(|&m| m as f64).sum::<f64>() / slice.len() as f64 / iq::MAG_SCALE as f64;
+                win_noise_n += 1;
+            }
+        }
         let mut chunk = Vec::new();
         let mut reduced = Vec::new();
         let now = wall();
@@ -328,6 +441,9 @@ fn main() -> Result<()> {
             // in raw magnitude units (0..181) stretched to 0..255.
             let ticks = (f.start * 5.0).round() as u64;
             let signal = ((f.signal / iq::MAG_SCALE) * 1.4).clamp(0.0, 255.0) as u8;
+            if signal >= 250 {
+                win_strong = true;
+            }
             beast::encode(&f.bytes, ticks, signal, &mut chunk);
             if reducer.forward(&f.bytes, now_ms) {
                 beast::encode(&f.bytes, ticks, signal, &mut reduced);
@@ -362,6 +478,32 @@ fn main() -> Result<()> {
             );
             frames_1s = 0;
             last_report = Instant::now();
+        }
+        if let Some(g) = gainer.as_mut() {
+            if win_start.elapsed().as_secs_f64() >= gain::WINDOW_S && win_samples > 0 {
+                let w = gain::Window {
+                    clip_fraction: win_clipped as f64 / (2 * win_samples) as f64,
+                    strong_clip: win_strong,
+                    noise: if win_noise_n > 0 { (win_noise / win_noise_n as f64) as f32 } else { 0.0 },
+                };
+                let before = g.current();
+                if let Some(t) = g.step(&w, wall()) {
+                    eprintln!(
+                        "rx: gain {:.1} -> {:.1} dB (clipping {:.2} %, noise {:.2})",
+                        before as f32 / 10.0,
+                        t as f32 / 10.0,
+                        100.0 * w.clip_fraction,
+                        w.noise
+                    );
+                    let _ = gain_tx.send(t);
+                }
+                win_samples = 0;
+                win_clipped = 0;
+                win_strong = false;
+                win_noise = 0.0;
+                win_noise_n = 0;
+                win_start = Instant::now();
+            }
         }
         if a.seconds > 0 && started.elapsed() >= Duration::from_secs(a.seconds) {
             break;
