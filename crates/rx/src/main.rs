@@ -67,6 +67,24 @@ struct Args {
     lat: f64,
     #[arg(long, default_value_t = 0.0)]
     lon: f64,
+
+    // readsb's flags, accepted so a station configured for readsb runs rx
+    // by changing the binary path alone.
+    /// Accepted for readsb compatibility; only rtlsdr is supported.
+    #[arg(long, default_value = "rtlsdr", hide = true)]
+    device_type: String,
+    /// Accepted for readsb compatibility (no effect).
+    #[arg(long, default_value_t = false, hide = true)]
+    quiet: bool,
+    /// Accepted for readsb compatibility (no effect).
+    #[arg(long, default_value_t = false, hide = true)]
+    net: bool,
+    /// readsb's Beast output port: serves on 0.0.0.0:PORT.
+    #[arg(long, hide = true)]
+    net_bo_port: Option<u16>,
+    /// Accepted for readsb compatibility; aircraft.json is written every second.
+    #[arg(long, default_value_t = 1, hide = true)]
+    write_json_every: u32,
 }
 
 /// A block of samples with the stream index of its first sample.
@@ -83,10 +101,11 @@ fn main() -> Result<()> {
         }
         return Ok(());
     }
+    anyhow::ensure!(a.device_type == "rtlsdr", "only --device-type rtlsdr is supported (got {})", a.device_type);
     let mut dev = sdr::Device::open(a.device, a.serial.as_deref())?;
     dev.set_sample_rate(SAMPLE_RATE)?;
     dev.set_center_freq(FREQ)?;
-    if a.gain == "agc" {
+    if a.gain == "agc" || a.gain == "auto" {
         dev.set_agc()?;
         eprintln!("rx: {} at {} MS/s, hardware AGC", dev.name, SAMPLE_RATE as f64 / 1e6);
     } else {
@@ -131,9 +150,13 @@ fn main() -> Result<()> {
     });
 
     let hub = beast::Hub::new();
-    if !a.beast_listen.is_empty() {
-        hub.serve(&a.beast_listen)?;
-        eprintln!("rx: Beast server on {}", a.beast_listen);
+    let listen = match a.net_bo_port {
+        Some(p) => format!("0.0.0.0:{p}"),
+        None => a.beast_listen.clone(),
+    };
+    if !listen.is_empty() {
+        hub.serve(&listen)?;
+        eprintln!("rx: Beast server on {listen}");
     }
     for c in &a.net_connector {
         let parts: Vec<&str> = c.split(',').map(|p| p.trim()).collect();
