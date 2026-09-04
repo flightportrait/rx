@@ -318,7 +318,7 @@ fn main() -> Result<()> {
                 let expected = (t0.elapsed().as_secs_f64() * SAMPLE_RATE as f64) as i64;
                 let lag = expected - (delivered + samples) as i64;
                 let block = (BLOCK_BYTES / 2) as i64;
-                if settled_reads % 4800 == 0 {
+                if settled_reads.is_multiple_of(4800) {
                     min_lag = i64::MAX; // re-learn the baseline every ten minutes of settled reads
                 }
                 if lag < min_lag {
@@ -583,7 +583,7 @@ fn main() -> Result<()> {
             }
             st.tick(now, json_dir.as_deref());
             report_ticks += 1;
-            if a.verbose || report_ticks % 60 == 0 {
+            if a.verbose || report_ticks.is_multiple_of(60) {
                 eprintln!(
                 "rx: {frames_1s} frames/s, {frames_total} total, {} aircraft ({} tracked), {} cancellations, {} rescued, {} rejected repairs, {} consumers",
                 aircraft.len(),

@@ -125,7 +125,7 @@ impl Hub {
                     if stream.write_all(&hello(None)).is_err() {
                         return;
                     }
-                    if pump(&mut stream, &rx).is_err() {}
+                    let _ = pump(&mut stream, &rx);
                     eprintln!("beast: client {peer} gone");
                 });
             }
