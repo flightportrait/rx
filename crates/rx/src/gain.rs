@@ -132,7 +132,7 @@ mod tests {
         assert_eq!(c.step(&w(0.0, false, 2.0), 10.0), None); // hold breaks the streak
         assert_eq!(c.step(&w(0.01, false, 2.0), 20.0), None);
         assert_eq!(c.step(&w(0.01, false, 2.0), 30.0), Some(400)); // agreed: step down
-        // held for 20 s: votes during the hold are ignored
+                                                                   // held for 20 s: votes during the hold are ignored
         assert_eq!(c.step(&w(0.01, false, 2.0), 40.0), None);
         assert_eq!(c.step(&w(0.01, false, 2.0), 45.0), None);
         // after the hold, two more agreeing windows step again

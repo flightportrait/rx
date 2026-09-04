@@ -115,7 +115,10 @@ impl Hub {
         std::thread::spawn(move || {
             for conn in listener.incoming() {
                 let Ok(mut stream) = conn else { continue };
-                let peer = stream.peer_addr().map(|p| p.to_string()).unwrap_or_default();
+                let peer = stream
+                    .peer_addr()
+                    .map(|p| p.to_string())
+                    .unwrap_or_default();
                 let rx = hub.subscribe(Stream::Full);
                 std::thread::spawn(move || {
                     let _ = stream.set_nodelay(true);
@@ -137,9 +140,17 @@ impl Hub {
         std::thread::spawn(move || {
             let mut backoff = 1u64;
             loop {
-                match addr.to_socket_addrs().ok().and_then(|mut a| a.next()).and_then(|a| TcpStream::connect_timeout(&a, Duration::from_secs(10)).ok()) {
+                match addr
+                    .to_socket_addrs()
+                    .ok()
+                    .and_then(|mut a| a.next())
+                    .and_then(|a| TcpStream::connect_timeout(&a, Duration::from_secs(10)).ok())
+                {
                     Some(mut s) => {
-                        eprintln!("beast: connected to {addr}{}", if uuid.is_some() { " (sent UUID)" } else { "" });
+                        eprintln!(
+                            "beast: connected to {addr}{}",
+                            if uuid.is_some() { " (sent UUID)" } else { "" }
+                        );
                         backoff = 1;
                         let _ = s.set_nodelay(true);
                         let rx = hub.subscribe(stream);

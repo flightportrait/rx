@@ -121,8 +121,13 @@ impl Tracker {
                 let partner = if p.odd { even } else { odd };
                 if let Some((t, la, lo)) = partner {
                     if now - t < 10.0 {
-                        let (e, o) = if p.odd { ((la, lo), (p.cpr_lat, p.cpr_lon)) } else { ((p.cpr_lat, p.cpr_lon), (la, lo)) };
-                        if let Some((lat, lon)) = mb_modes::cpr::global_decode_airborne(e, o, p.odd) {
+                        let (e, o) = if p.odd {
+                            ((la, lo), (p.cpr_lat, p.cpr_lon))
+                        } else {
+                            ((p.cpr_lat, p.cpr_lon), (la, lo))
+                        };
+                        if let Some((lat, lon)) = mb_modes::cpr::global_decode_airborne(e, o, p.odd)
+                        {
                             new_pos = Some((lat, lon, p.alt_ft));
                         }
                     }
@@ -144,7 +149,10 @@ impl Tracker {
                         }
                     }
                 }
-                let a = self.aircraft.entry(hex).or_insert_with(|| Aircraft::new(hex, now, signal));
+                let a = self
+                    .aircraft
+                    .entry(hex)
+                    .or_insert_with(|| Aircraft::new(hex, now, signal));
                 if p.odd {
                     a.odd = Some(mine);
                 } else {
@@ -161,7 +169,10 @@ impl Tracker {
                 }
             }
         }
-        let a = self.aircraft.entry(hex).or_insert_with(|| Aircraft::new(hex, now, signal));
+        let a = self
+            .aircraft
+            .entry(hex)
+            .or_insert_with(|| Aircraft::new(hex, now, signal));
         a.last_seen = now;
         a.messages += 1;
         a.signal = signal;
@@ -174,9 +185,14 @@ impl Tracker {
     /// taken only when the aircraft has no ADS-B position younger than
     /// 30 s. Never counted as a message the aircraft sent.
     pub fn offer_mlat(&mut self, bytes: &[u8], now: f64) {
-        let Some(p) = parse_airborne(bytes) else { return };
+        let Some(p) = parse_airborne(bytes) else {
+            return;
+        };
         let hex = (bytes[1] as u32) << 16 | (bytes[2] as u32) << 8 | bytes[3] as u32;
-        let a = self.aircraft.entry(hex).or_insert_with(|| Aircraft::new(hex, now, 0.0));
+        let a = self
+            .aircraft
+            .entry(hex)
+            .or_insert_with(|| Aircraft::new(hex, now, 0.0));
         let mine = (now, p.cpr_lat, p.cpr_lon);
         let partner = if p.odd { a.mlat_even } else { a.mlat_odd };
         if p.odd {
@@ -188,8 +204,14 @@ impl Tracker {
         if now - t >= 10.0 {
             return;
         }
-        let (e, o) = if p.odd { ((la, lo), (p.cpr_lat, p.cpr_lon)) } else { ((p.cpr_lat, p.cpr_lon), (la, lo)) };
-        let Some((lat, lon)) = mb_modes::cpr::global_decode_airborne(e, o, p.odd) else { return };
+        let (e, o) = if p.odd {
+            ((la, lo), (p.cpr_lat, p.cpr_lon))
+        } else {
+            ((p.cpr_lat, p.cpr_lon), (la, lo))
+        };
+        let Some((lat, lon)) = mb_modes::cpr::global_decode_airborne(e, o, p.odd) else {
+            return;
+        };
         let adsb_fresh = !a.pos_mlat && a.lat.is_some() && now - a.pos_time < 30.0;
         if adsb_fresh {
             return;
@@ -212,7 +234,10 @@ impl Tracker {
     /// Write aircraft.json in readsb's shape for the fields we have.
     pub fn write_json(&self, dir: &std::path::Path, now: f64) -> std::io::Result<()> {
         let mut s = String::new();
-        s.push_str(&format!("{{\"now\":{now:.1},\"messages\":{},\"aircraft\":[", self.messages));
+        s.push_str(&format!(
+            "{{\"now\":{now:.1},\"messages\":{},\"aircraft\":[",
+            self.messages
+        ));
         let mut first = true;
         let mut list: Vec<&Aircraft> = self.aircraft.values().collect();
         list.sort_by_key(|a| a.hex);
@@ -229,7 +254,11 @@ impl Tracker {
                 rssi_dbfs(a.signal)
             ));
             if let (Some(lat), Some(lon)) = (a.lat, a.lon) {
-                s.push_str(&format!(",\"lat\":{lat:.6},\"lon\":{lon:.6},\"seen_pos\":{:.1},\"r_dst\":{:.1}", now - a.pos_time, haversine_m(self.lat, self.lon, lat, lon) / 1852.0));
+                s.push_str(&format!(
+                    ",\"lat\":{lat:.6},\"lon\":{lon:.6},\"seen_pos\":{:.1},\"r_dst\":{:.1}",
+                    now - a.pos_time,
+                    haversine_m(self.lat, self.lon, lat, lon) / 1852.0
+                ));
                 if a.pos_mlat {
                     s.push_str(",\"mlat\":[\"lat\",\"lon\"]");
                 }
@@ -257,7 +286,12 @@ fn rssi_dbfs(level: f32) -> f32 {
 }
 
 fn haversine_m(lat1: f64, lon1: f64, lat2: f64, lon2: f64) -> f64 {
-    let (a1, o1, a2, o2) = (lat1.to_radians(), lon1.to_radians(), lat2.to_radians(), lon2.to_radians());
+    let (a1, o1, a2, o2) = (
+        lat1.to_radians(),
+        lon1.to_radians(),
+        lat2.to_radians(),
+        lon2.to_radians(),
+    );
     let h = ((a2 - a1) / 2.0).sin().powi(2) + a1.cos() * a2.cos() * ((o2 - o1) / 2.0).sin().powi(2);
     2.0 * 6_371_000.0 * h.sqrt().asin()
 }

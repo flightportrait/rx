@@ -31,7 +31,11 @@ impl MagLut {
     pub fn magnitudes(&self, bytes: &[u8], out: &mut Vec<u16>) {
         out.reserve(bytes.len() / 2);
         let t = &self.0;
-        out.extend(bytes.chunks_exact(2).map(|p| t[(p[0] as usize) << 8 | p[1] as usize]));
+        out.extend(
+            bytes
+                .chunks_exact(2)
+                .map(|p| t[(p[0] as usize) << 8 | p[1] as usize]),
+        );
     }
 }
 

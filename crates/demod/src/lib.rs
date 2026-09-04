@@ -1,3 +1,4 @@
+#![allow(clippy::needless_range_loop)] // index loops are written for the vectorizer
 //! Mode S demodulation at 2.4 MS/s (2.4 samples per microsecond).
 //!
 //! Preamble: pulses at 0, 1.0, 3.5 and 4.5 us, each 0.5 us wide; data
@@ -212,8 +213,13 @@ fn preamble_int(w: &[u16]) -> (u32, u32, u32, u32) {
     let p2 = 3 * m(8) + 3 * m(9);
     let p3 = m(10) + 5 * m(11);
     // gaps: [1.2,2.4) [3.6,8.4) [12,19.2): total length 5.5 us = 13.2 samples = 66 fifths
-    let g = 4 * m(1) + 2 * m(2) + 2 * m(3) + 5 * (m(4) + m(5) + m(6) + m(7)) + 2 * m(8)
-        + 5 * (m(12) + m(13) + m(14) + m(15) + m(16) + m(17) + m(18)) + m(19);
+    let g = 4 * m(1)
+        + 2 * m(2)
+        + 2 * m(3)
+        + 5 * (m(4) + m(5) + m(6) + m(7))
+        + 2 * m(8)
+        + 5 * (m(12) + m(13) + m(14) + m(15) + m(16) + m(17) + m(18))
+        + m(19);
     // pulse level per half-us = pulse/6 fifths; gap level per fifth-sample = g/66.
     // Return everything scaled to "per fifth of a sample" * 6 * 66 to stay integer:
     let pm = (p0 + p1 + p2 + p3) * 66 / 4; // sum/4 pulses, each over 6 fifths -> *66/6... see below
@@ -230,7 +236,14 @@ fn preamble_int(w: &[u16]) -> (u32, u32, u32, u32) {
 /// The three gate passes over one sub-block: pairwise maxima, prefix
 /// sums, and the hit mask `psum * 11 * 256 > ratio4 * gsum`.
 #[inline(never)]
-fn gate_passes(span: &[u16], len: usize, ratio4: u32, pmax: &mut Vec<u16>, cum: &mut Vec<u32>, hits: &mut Vec<u8>) {
+fn gate_passes(
+    span: &[u16],
+    len: usize,
+    ratio4: u32,
+    pmax: &mut Vec<u16>,
+    cum: &mut Vec<u32>,
+    hits: &mut Vec<u8>,
+) {
     pmax.clear();
     pmax.resize(span.len() - 1, 0);
     cum.clear();
@@ -248,8 +261,18 @@ fn gate_passes(span: &[u16], len: usize, ratio4: u32, pmax: &mut Vec<u16>, cum: 
         for j in 0..n {
             o[j] = x[j].max(y[j]);
         }
-        let (a, b, c8, d) = (&pmax[..len], &pmax[2..2 + len], &pmax[8..8 + len], &pmax[10..10 + len]);
-        let (g8, g4, g19, g12) = (&cum[8..8 + len], &cum[4..4 + len], &cum[19..19 + len], &cum[12..12 + len]);
+        let (a, b, c8, d) = (
+            &pmax[..len],
+            &pmax[2..2 + len],
+            &pmax[8..8 + len],
+            &pmax[10..10 + len],
+        );
+        let (g8, g4, g19, g12) = (
+            &cum[8..8 + len],
+            &cum[4..4 + len],
+            &cum[19..19 + len],
+            &cum[12..12 + len],
+        );
         let hits = &mut hits[..len];
         for j in 0..len {
             let psum = a[j] as u32 + b[j] as u32 + c8[j] as u32 + d[j] as u32;
@@ -296,7 +319,7 @@ impl Crc24 {
 fn next_hit(hits: &[u8], from: usize) -> Option<usize> {
     let mut j = from;
     let n = hits.len();
-    while j < n && j % 8 != 0 {
+    while j < n && !j.is_multiple_of(8) {
         if hits[j] != 0 {
             return Some(j);
         }
@@ -371,9 +394,20 @@ pub fn frame_envelope(bytes: &[u8], start: f64, n: usize) -> Vec<f32> {
 /// carrier from the phase advance between consecutive pulse samples, then
 /// refined by a small grid, complex amplitude by least squares. Returns
 /// (start, w, cr, ci, residual energy / energy before) for the best trial.
-fn fit_frame(iq: &[u8], s0: usize, n: usize, start_rel: f64, bytes: &[u8]) -> (f64, f64, f32, f32, f32) {
+fn fit_frame(
+    iq: &[u8],
+    s0: usize,
+    n: usize,
+    start_rel: f64,
+    bytes: &[u8],
+) -> (f64, f64, f32, f32, f32) {
     let z: Vec<(f32, f32)> = (0..n)
-        .map(|k| (iq[2 * (s0 + k)] as f32 - 127.4, iq[2 * (s0 + k) + 1] as f32 - 127.4))
+        .map(|k| {
+            (
+                iq[2 * (s0 + k)] as f32 - 127.4,
+                iq[2 * (s0 + k) + 1] as f32 - 127.4,
+            )
+        })
         .collect();
     let before: f32 = z.iter().map(|(a, b)| a * a + b * b).sum();
     let mut best = (start_rel, 0.0f64, 0f32, 0f32, f32::MAX);
@@ -680,22 +714,38 @@ impl Demodulator {
             syn56: syndromes(56),
             syn112: syndromes(112),
             syn56_sorted: {
-                let mut v: Vec<(u32, usize)> = syndromes(56).into_iter().enumerate().map(|(i, s)| (s, i)).collect();
+                let mut v: Vec<(u32, usize)> = syndromes(56)
+                    .into_iter()
+                    .enumerate()
+                    .map(|(i, s)| (s, i))
+                    .collect();
                 v.sort_unstable();
                 v
             },
             syn112_sorted: {
-                let mut v: Vec<(u32, usize)> = syndromes(112).into_iter().enumerate().map(|(i, s)| (s, i)).collect();
+                let mut v: Vec<(u32, usize)> = syndromes(112)
+                    .into_iter()
+                    .enumerate()
+                    .map(|(i, s)| (s, i))
+                    .collect();
                 v.sort_unstable();
                 v
             },
             asyn56_sorted: {
-                let mut v: Vec<(u32, usize)> = address_syndromes(56).into_iter().enumerate().map(|(i, s)| (s, i)).collect();
+                let mut v: Vec<(u32, usize)> = address_syndromes(56)
+                    .into_iter()
+                    .enumerate()
+                    .map(|(i, s)| (s, i))
+                    .collect();
                 v.sort_unstable();
                 v
             },
             asyn112_sorted: {
-                let mut v: Vec<(u32, usize)> = address_syndromes(112).into_iter().enumerate().map(|(i, s)| (s, i)).collect();
+                let mut v: Vec<(u32, usize)> = address_syndromes(112)
+                    .into_iter()
+                    .enumerate()
+                    .map(|(i, s)| (s, i))
+                    .collect();
                 v.sort_unstable();
                 v
             },
@@ -707,14 +757,22 @@ impl Demodulator {
     /// `m` (two per sample); `remag` recomputes magnitudes for a span.
     /// After each accepted frame the frame is subtracted from the I/Q and
     /// its span rescanned once for a frame that was underneath it.
-    pub fn run_iq(&mut self, m: &mut Vec<u16>, iq: &mut [u8], base: u64, remag: &dyn Fn(&[u8], &mut [u16])) -> Vec<Frame> {
+    pub fn run_iq(
+        &mut self,
+        m: &mut [u16],
+        iq: &mut [u8],
+        base: u64,
+        remag: &dyn Fn(&[u8], &mut [u16]),
+    ) -> Vec<Frame> {
         let mut out = self.run(m, base);
         if !self.p.cancel {
             return out;
         }
         let mut k = 0;
-        let mut emitted: std::collections::HashSet<(u64, Vec<u8>)> =
-            out.iter().map(|f| ((f.start * 5.0).round() as u64, f.bytes.clone())).collect();
+        let mut emitted: std::collections::HashSet<(u64, Vec<u8>)> = out
+            .iter()
+            .map(|f| ((f.start * 5.0).round() as u64, f.bytes.clone()))
+            .collect();
         while k < out.len() {
             let f = out[k].clone();
             k += 1;
@@ -727,7 +785,8 @@ impl Demodulator {
             // The preamble gaps sit between pulses and collect their tails,
             // about 0.3 of the pulse level; compare with that, not the floor.
             let expected_gap = self.block_mean + 0.3 * f.signal;
-            let gap_hot = self.p.cancel_gap_ratio > 0.0 && f.gap >= self.p.cancel_gap_ratio * expected_gap;
+            let gap_hot =
+                self.p.cancel_gap_ratio > 0.0 && f.gap >= self.p.cancel_gap_ratio * expected_gap;
             // A pulse leaks about a third of its level into the neighbouring
             // empty half-bit (measured envelope), so the expected empty-half
             // level of a lone frame is the noise floor plus that leakage.
@@ -741,7 +800,17 @@ impl Demodulator {
             }
             let removed = cancel_frame(iq, start, &f.bytes);
             self.stats.cancelled += 1;
-            let bucket = if removed < 0.5 { 0 } else if removed < 0.8 { 1 } else if removed < 0.9 { 2 } else if removed < 0.95 { 3 } else { 4 };
+            let bucket = if removed < 0.5 {
+                0
+            } else if removed < 0.8 {
+                1
+            } else if removed < 0.9 {
+                2
+            } else if removed < 0.95 {
+                3
+            } else {
+                4
+            };
             self.stats.removed_hist[bucket] += 1;
             if removed < 0.3 {
                 continue;
@@ -816,7 +885,11 @@ impl Demodulator {
                 }
             }
             let w: &[u16; 20] = m[i..i + 20].try_into().unwrap();
-            let pmin = w[0].max(w[1]).min(w[2].max(w[3])).min(w[8].max(w[9])).min(w[10].max(w[11]));
+            let pmin = w[0]
+                .max(w[1])
+                .min(w[2].max(w[3]))
+                .min(w[8].max(w[9]))
+                .min(w[10].max(w[11]));
             let spikes = (w[4] > pmin) as usize
                 + (w[5] > pmin) as usize
                 + (w[6] > pmin) as usize
@@ -869,7 +942,11 @@ impl Demodulator {
                 }
             }
             let s0 = best.0;
-            let phases: &[f64] = if self.p.phase_span >= 2 { &[-0.2, 0.2, -0.4, 0.4] } else { &[-0.2, 0.2] };
+            let phases: &[f64] = if self.p.phase_span >= 2 {
+                &[-0.2, 0.2, -0.4, 0.4]
+            } else {
+                &[-0.2, 0.2]
+            };
             for &ph in phases {
                 let st = s0 + ph;
                 if st < 0.0 {
@@ -959,7 +1036,7 @@ impl Demodulator {
             for ph in PHASES {
                 let st = s as f64 + ph;
                 if let Some((score, pm)) = self.preamble(m, st) {
-                    if best.map_or(true, |b| score > b.1) {
+                    if best.is_none_or(|b| score > b.1) {
                         best = Some((st, score, pm));
                     }
                 }
@@ -1010,9 +1087,7 @@ impl Demodulator {
         let (bytes, fixed) = f;
         let df = bytes[0] >> 3;
         let n = bytes.len();
-        let confirmed = |known: &std::collections::HashMap<u32, u64>, a: u32| {
-            matches!(known.get(&a), Some(&t) if now.saturating_sub(t) < KNOWN_WINDOW)
-        };
+        let confirmed = |known: &std::collections::HashMap<u32, u64>, a: u32| matches!(known.get(&a), Some(&t) if now.saturating_sub(t) < KNOWN_WINDOW);
         match df {
             11 | 17 | 18 => {
                 let a = (bytes[1] as u32) << 16 | (bytes[2] as u32) << 8 | bytes[3] as u32;
@@ -1026,12 +1101,14 @@ impl Demodulator {
                 }
                 self.known.insert(a, now);
                 if self.known.len() > 4096 {
-                    self.known.retain(|_, t| now.saturating_sub(*t) < KNOWN_WINDOW);
+                    self.known
+                        .retain(|_, t| now.saturating_sub(*t) < KNOWN_WINDOW);
                 }
                 Some((bytes, fixed))
             }
             _ => {
-                let ap = (bytes[n - 3] as u32) << 16 | (bytes[n - 2] as u32) << 8 | bytes[n - 1] as u32;
+                let ap =
+                    (bytes[n - 3] as u32) << 16 | (bytes[n - 2] as u32) << 8 | bytes[n - 1] as u32;
                 let a = self.crc.of(&bytes[..n - 3]) ^ ap;
                 confirmed(&self.known, a).then_some((bytes, fixed))
             }
@@ -1050,9 +1127,15 @@ impl Demodulator {
         let w: &[u16; 21] = m[i..i + 21].try_into().unwrap();
         let pw = &self.phases[k];
         let pulse = |(first, t): &(usize, [i32; 3])| -> u32 {
-            (t[0] * w[*first] as i32 + t[1] * w[first + 1] as i32 + t[2] * w[first + 2] as i32) as u32
+            (t[0] * w[*first] as i32 + t[1] * w[first + 1] as i32 + t[2] * w[first + 2] as i32)
+                as u32
         };
-        let p = [pulse(&pw.pulse_taps[0]), pulse(&pw.pulse_taps[1]), pulse(&pw.pulse_taps[2]), pulse(&pw.pulse_taps[3])];
+        let p = [
+            pulse(&pw.pulse_taps[0]),
+            pulse(&pw.pulse_taps[1]),
+            pulse(&pw.pulse_taps[2]),
+            pulse(&pw.pulse_taps[3]),
+        ];
         let mut g = 0i32;
         for j in 0..21 {
             g += pw.gap[j] * w[j] as i32;
@@ -1208,10 +1291,9 @@ impl Demodulator {
             let a = (bytes[1] as u32) << 16 | (bytes[2] as u32) << 8 | bytes[3] as u32;
             let now = self.now;
             let near = self.p.near_bits;
-            self.last_known = self
-                .known
-                .iter()
-                .any(|(&k, &t)| now.saturating_sub(t) < KNOWN_WINDOW && (k ^ a).count_ones() <= near);
+            self.last_known = self.known.iter().any(|(&k, &t)| {
+                now.saturating_sub(t) < KNOWN_WINDOW && (k ^ a).count_ones() <= near
+            });
         } else {
             self.last_known = false;
         }
@@ -1243,7 +1325,8 @@ impl Demodulator {
                 // difference is looked up among the syndromes; a hit whose
                 // bit ranks among the `ap_fix` least confident is repaired.
                 let n = bytes.len();
-                let ap = (bytes[n - 3] as u32) << 16 | (bytes[n - 2] as u32) << 8 | bytes[n - 1] as u32;
+                let ap =
+                    (bytes[n - 3] as u32) << 16 | (bytes[n - 2] as u32) << 8 | bytes[n - 1] as u32;
                 let a = self.crc.of(&bytes[..n - 3]) ^ ap;
                 let now = self.now;
                 if matches!(self.known.get(&a), Some(&t) if now.saturating_sub(t) < KNOWN_WINDOW) {
@@ -1252,7 +1335,11 @@ impl Demodulator {
                 if self.p.ap_fix == 0 {
                     return None;
                 }
-                let sorted = if n == 14 { &self.asyn112_sorted } else { &self.asyn56_sorted };
+                let sorted = if n == 14 {
+                    &self.asyn112_sorted
+                } else {
+                    &self.asyn56_sorted
+                };
                 for (&k, &t) in &self.known {
                     if now.saturating_sub(t) >= KNOWN_WINDOW {
                         continue;
@@ -1277,7 +1364,13 @@ impl Demodulator {
     /// `deep` allows repairs of two or more bits; without it only a
     /// single flip is tried. Multi-bit repairs are only admitted for
     /// confirmed aircraft, so searching for them elsewhere is wasted.
-    fn repair(&self, bytes: &mut [u8], conf: &[i32], target: u32, deep: bool) -> Option<(Vec<u8>, u8)> {
+    fn repair(
+        &self,
+        bytes: &mut [u8],
+        conf: &[i32],
+        target: u32,
+        deep: bool,
+    ) -> Option<(Vec<u8>, u8)> {
         let r = self.crc.of(bytes) ^ target;
         if r == 0 {
             return Some((bytes.to_vec(), 0));
@@ -1285,7 +1378,11 @@ impl Demodulator {
         if self.p.max_fix == 0 {
             return None;
         }
-        let max_fix = if deep { self.p.max_fix } else { self.p.max_fix.min(1) };
+        let max_fix = if deep {
+            self.p.max_fix
+        } else {
+            self.p.max_fix.min(1)
+        };
         let (syn, sorted) = if bytes.len() == 14 {
             (&self.syn112, &self.syn112_sorted)
         } else {
@@ -1305,7 +1402,14 @@ impl Demodulator {
             return None;
         }
         // Deeper repairs need the confidence order of the least confident bits.
-        let keep = self.p.soft1.max(self.p.soft2).max(self.p.soft3).max(self.p.soft4).max(self.p.soft5).min(conf.len());
+        let keep = self
+            .p
+            .soft1
+            .max(self.p.soft2)
+            .max(self.p.soft3)
+            .max(self.p.soft4)
+            .max(self.p.soft5)
+            .min(conf.len());
         let mut order: Vec<usize> = (0..conf.len()).collect();
         if keep < order.len() {
             order.select_nth_unstable_by_key(keep, |&i| conf[i]);
@@ -1441,7 +1545,11 @@ mod tests {
             assert_eq!(f.len(), 1, "phase {ph}");
             assert_eq!(f[0].bytes, DF17);
             assert_eq!(f[0].fixed, 0);
-            assert!((f[0].start - (50.0 + ph)).abs() < 0.5, "start {}", f[0].start);
+            assert!(
+                (f[0].start - (50.0 + ph)).abs() < 0.5,
+                "start {}",
+                f[0].start
+            );
         }
     }
 

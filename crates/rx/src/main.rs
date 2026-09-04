@@ -8,8 +8,8 @@
 //! accounts a gap when the dongle falls behind by more than a block.
 
 mod beast;
-mod gain;
 mod beast_in;
+mod gain;
 mod reduce;
 mod sdr;
 mod stats;
@@ -160,11 +160,20 @@ fn configure(dev: &mut sdr::Device, cfg: &RadioCfg) -> Result<()> {
     match cfg.gain {
         GainMode::Agc => {
             dev.set_agc()?;
-            eprintln!("rx: {} at {} MS/s, hardware AGC", dev.name, SAMPLE_RATE as f64 / 1e6);
+            eprintln!(
+                "rx: {} at {} MS/s, hardware AGC",
+                dev.name,
+                SAMPLE_RATE as f64 / 1e6
+            );
         }
         GainMode::Fixed(t) => {
             let got = dev.set_gain(t)?;
-            eprintln!("rx: {} at {} MS/s, gain {:.1} dB", dev.name, SAMPLE_RATE as f64 / 1e6, got as f32 / 10.0);
+            eprintln!(
+                "rx: {} at {} MS/s, gain {:.1} dB",
+                dev.name,
+                SAMPLE_RATE as f64 / 1e6,
+                got as f32 / 10.0
+            );
         }
     }
     dev.set_bias_tee(cfg.bias_tee)?;
@@ -193,13 +202,23 @@ fn unix_utc_name(t: f64) -> String {
     let d = doy - (153 * mp + 2) / 5 + 1;
     let m = if mp < 10 { mp + 3 } else { mp - 9 };
     let y = if m <= 2 { y + 1 } else { y };
-    format!("{y:04}{m:02}{d:02}T{:02}{:02}{:02}Z", rem / 3600, (rem % 3600) / 60, rem % 60)
+    format!(
+        "{y:04}{m:02}{d:02}T{:02}{:02}{:02}Z",
+        rem / 3600,
+        (rem % 3600) / 60,
+        rem % 60
+    )
 }
 
 /// Keep the newest `keep` clips in `dir`.
 fn prune_clips(dir: &std::path::Path, keep: usize) {
     let mut names: Vec<String> = std::fs::read_dir(dir)
-        .map(|it| it.filter_map(|e| e.ok()).map(|e| e.file_name().to_string_lossy().into_owned()).filter(|n| n.ends_with(".cu8")).collect())
+        .map(|it| {
+            it.filter_map(|e| e.ok())
+                .map(|e| e.file_name().to_string_lossy().into_owned())
+                .filter(|n| n.ends_with(".cu8"))
+                .collect()
+        })
         .unwrap_or_default();
     names.sort();
     while names.len() > keep {
@@ -216,7 +235,11 @@ fn main() -> Result<()> {
         }
         return Ok(());
     }
-    anyhow::ensure!(a.device_type == "rtlsdr", "only --device-type rtlsdr is supported (got {})", a.device_type);
+    anyhow::ensure!(
+        a.device_type == "rtlsdr",
+        "only --device-type rtlsdr is supported (got {})",
+        a.device_type
+    );
     let software_gain = a.gain == "auto";
     let gain_mode = if a.gain == "agc" {
         GainMode::Agc
@@ -279,7 +302,11 @@ fn main() -> Result<()> {
                     gaps += 1;
                     min_lag = i64::MAX;
                     behind_for = 0;
-                    eprintln!("rx: dongle back after {:.1} s (gap {})", lost_at.elapsed().as_secs_f64(), gaps);
+                    eprintln!(
+                        "rx: dongle back after {:.1} s (gap {})",
+                        lost_at.elapsed().as_secs_f64(),
+                        gaps
+                    );
                     continue;
                 }
             };
@@ -305,7 +332,11 @@ fn main() -> Result<()> {
                         delivered += gap;
                         gaps += 1;
                         behind_for = 0;
-                        eprintln!("rx: sample gap of {:.1} ms accounted (gap {})", gap as f64 / SAMPLE_RATE as f64 * 1e3, gaps);
+                        eprintln!(
+                            "rx: sample gap of {:.1} ms accounted (gap {})",
+                            gap as f64 / SAMPLE_RATE as f64 * 1e3,
+                            gaps
+                        );
                     }
                 } else {
                     behind_for = 0;
@@ -315,7 +346,14 @@ fn main() -> Result<()> {
             clock += samples;
             delivered += samples;
             let clipped = count_clipped(&buf);
-            if tx.send(Block { first_sample: first, bytes: buf, clipped }).is_err() {
+            if tx
+                .send(Block {
+                    first_sample: first,
+                    bytes: buf,
+                    clipped,
+                })
+                .is_err()
+            {
                 return Ok(());
             }
         }
@@ -337,7 +375,10 @@ fn main() -> Result<()> {
     }
     for c in &a.net_connector {
         let parts: Vec<&str> = c.split(',').map(|p| p.trim()).collect();
-        anyhow::ensure!(parts.len() >= 3, "--net-connector wants host,port,protocol[,uuid=...]: {c}");
+        anyhow::ensure!(
+            parts.len() >= 3,
+            "--net-connector wants host,port,protocol[,uuid=...]: {c}"
+        );
         if parts[2] == "beast_in" {
             beast_in::connect(format!("{}:{}", parts[0], parts[1]), in_tx.clone());
             continue;
@@ -348,7 +389,11 @@ fn main() -> Result<()> {
             "beast_reduce_plus_out" => (beast::Stream::Reduced, true),
             other => anyhow::bail!("unknown connector protocol {other} in {c}"),
         };
-        let uuid = parts.iter().skip(3).find_map(|p| p.strip_prefix("uuid=")).map(str::to_string);
+        let uuid = parts
+            .iter()
+            .skip(3)
+            .find_map(|p| p.strip_prefix("uuid="))
+            .map(str::to_string);
         if plus && uuid.is_none() {
             eprintln!("rx: {c}: beast_reduce_plus_out without uuid=; the aggregator will assign a random identity");
         }
@@ -388,16 +433,31 @@ fn main() -> Result<()> {
     if let Some(d) = &json_dir {
         std::fs::create_dir_all(d)?;
     }
-    let wall = || std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_secs_f64();
+    let wall = || {
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_secs_f64()
+    };
     let gain_db = a.gain.parse::<f32>().ok();
     let mut st = stats::Stats::new(wall(), gain_db);
-    let (mut frames_1s, mut frames_total, mut aircraft): (u64, u64, std::collections::HashSet<u32>) = (0, 0, Default::default());
+    let (mut frames_1s, mut frames_total, mut aircraft): (
+        u64,
+        u64,
+        std::collections::HashSet<u32>,
+    ) = (0, 0, Default::default());
     let mut expect_first: u64 = 0;
     // Software gain: one window every 10 s of clipping, strong-frame
     // clipping and the noise floor (mean magnitude of a slice of every
     // block), decided by the controller, applied by the reader.
     let mut gainer = software_gain.then(|| gain::Controller::new(gain_steps.clone(), 496));
-    let (mut win_samples, mut win_clipped, mut win_strong, mut win_noise, mut win_noise_n): (u64, u64, bool, f64, u64) = (0, 0, false, 0.0, 0);
+    let (mut win_samples, mut win_clipped, mut win_strong, mut win_noise, mut win_noise_n): (
+        u64,
+        u64,
+        bool,
+        f64,
+        u64,
+    ) = (0, 0, false, 0.0, 0);
     let mut win_start = Instant::now();
     for blk in rx.iter() {
         if gainer.is_some() {
@@ -411,7 +471,12 @@ fn main() -> Result<()> {
             if clip.is_none() && Instant::now() >= next_clip {
                 let name = format!("{}.cu8", unix_utc_name(wall()));
                 match std::fs::File::create(dir.join(&name)) {
-                    Ok(f) => clip = Some((std::io::BufWriter::new(f), a.clip_seconds * SAMPLE_RATE as u64)),
+                    Ok(f) => {
+                        clip = Some((
+                            std::io::BufWriter::new(f),
+                            a.clip_seconds * SAMPLE_RATE as u64,
+                        ))
+                    }
                     Err(e) => eprintln!("rx: clip: {e}"),
                 }
                 next_clip = Instant::now() + Duration::from_secs(a.clip_every);
@@ -449,7 +514,9 @@ fn main() -> Result<()> {
             let n = mag.len();
             let slice = &mag[n.saturating_sub(4096)..];
             if !slice.is_empty() {
-                win_noise += slice.iter().map(|&m| m as f64).sum::<f64>() / slice.len() as f64 / iq::MAG_SCALE as f64;
+                win_noise += slice.iter().map(|&m| m as f64).sum::<f64>()
+                    / slice.len() as f64
+                    / iq::MAG_SCALE as f64;
                 win_noise_n += 1;
             }
         }
@@ -480,7 +547,9 @@ fn main() -> Result<()> {
             frames_total += 1;
             st.frame(level, f.fixed);
             if f.bytes.len() == 14 && matches!(f.bytes[0] >> 3, 17 | 18) {
-                aircraft.insert((f.bytes[1] as u32) << 16 | (f.bytes[2] as u32) << 8 | f.bytes[3] as u32);
+                aircraft.insert(
+                    (f.bytes[1] as u32) << 16 | (f.bytes[2] as u32) << 8 | f.bytes[3] as u32,
+                );
             }
             // 12 MHz Beast ticks: five per sample. Signal byte: pulse level
             // in raw magnitude units (0..181) stretched to 0..255.
@@ -515,7 +584,7 @@ fn main() -> Result<()> {
             st.tick(now, json_dir.as_deref());
             report_ticks += 1;
             if a.verbose || report_ticks % 60 == 0 {
-            eprintln!(
+                eprintln!(
                 "rx: {frames_1s} frames/s, {frames_total} total, {} aircraft ({} tracked), {} cancellations, {} rescued, {} rejected repairs, {} consumers",
                 aircraft.len(),
                 tracker.aircraft.len(),
@@ -533,7 +602,11 @@ fn main() -> Result<()> {
                 let w = gain::Window {
                     clip_fraction: win_clipped as f64 / (2 * win_samples) as f64,
                     strong_clip: win_strong,
-                    noise: if win_noise_n > 0 { (win_noise / win_noise_n as f64) as f32 } else { 0.0 },
+                    noise: if win_noise_n > 0 {
+                        (win_noise / win_noise_n as f64) as f32
+                    } else {
+                        0.0
+                    },
                 };
                 let before = g.current();
                 if let Some(t) = g.step(&w, wall()) {
