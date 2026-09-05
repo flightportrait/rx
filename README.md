@@ -35,14 +35,18 @@ configured for readsb runs rx by changing the binary path.
 
 ## Behaviour
 
+- Samples are read with librtlsdr's asynchronous API, fifteen 256 KiB
+  transfers queued, as readsb does. A synchronous read leaves the USB
+  bus idle while the host handles each block and the RTL2832U silently
+  drops samples in that gap: 1.5 % of the stream on a Pi 3B, which
+  looked like a clock drift and was enough to keep MLAT servers from
+  ever pairing the station (found and fixed 2026-09-05; the delivered
+  rate is now within 250 ppm of nominal).
 - The clock is the count of delivered samples, as in readsb, and every
   frame carries a 12 MHz Beast timestamp derived from it. It is not
-  corrected from wall time: on a Pi 3B the stream drifts against the
-  wall clock by half a percent, far beyond any crystal error, and three
-  attempts at a wall-clock correction only injected false jumps
-  (2026-09-05, see the commit history). A real USB loss is a
-  discontinuity MLAT servers detect as a clock reset; short reads are
-  counted and reported once a minute.
+  corrected from wall time. A real USB loss is a discontinuity MLAT
+  servers detect as a clock reset; short reads are counted and reported
+  once a minute.
 - Gain: `--gain <dB>` fixed, `--gain agc` the hardware AGC, `--gain auto`
   rx's own loop: every 10 s it looks at clipped samples and the noise
   floor and moves the tuner one step, only when two windows agree, then
@@ -106,7 +110,11 @@ next restart.
   minutes; leserveur pulls the clips nightly (`~/shadow/shadow.sh`,
   cron 03:17 UTC) and appends one line per clip to `~/shadow/shadow.log`
   with CRC-valid and address-parity counts for rx and readsb, flagging
-  any aircraft only rx reported. Two weeks ahead with no
+  any aircraft only rx reported. The first night flagged three; all
+  three are real (two appear in readsb's output in neighbouring clips,
+  the third is a clean all-call readsb missed), so the flag means "readsb
+  missed it", and a false frame would show as an address neither the
+  aggregators nor later clips know. Two weeks ahead with no
   false frames, then rx becomes the installer's default with readsb as
   fallback.
 

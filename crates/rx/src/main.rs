@@ -23,8 +23,10 @@ use std::time::{Duration, Instant};
 
 const SAMPLE_RATE: u32 = 2_400_000;
 const FREQ: u32 = 1_090_000_000;
-/// Read block: 1/8 s of samples, a multiple of 16 KB as librtlsdr wants.
-const BLOCK_BYTES: usize = 655_360;
+/// USB transfers kept queued in librtlsdr and their size (readsb's
+/// values): 15 x 256 KiB, each 55 ms of samples.
+const BUF_COUNT: u32 = 15;
+const BUF_BYTES: usize = 262_144;
 
 #[derive(Parser)]
 #[command(about = "The Station radio: RTL-SDR in, Mode S frames out")]
@@ -270,79 +272,85 @@ fn main() -> Result<()> {
         let mut delivered: u64 = 0; // samples delivered by the dongle
         let mut clock: u64 = 0; // stream index including accounted gaps
         let mut gaps: u64 = 0;
-        // The clock is the count of delivered samples, as in readsb. It is
-        // not corrected from wall time: on this hardware the stream drifts
-        // against the wall clock by far more than any crystal error, and a
-        // synthesized correction only injected false jumps. A genuine USB
-        // loss shows as a discontinuity that MLAT servers detect as a clock
-        // reset; a dongle outage (below) is such a reset and is logged.
+        // The clock is the count of delivered samples, as in readsb, not
+        // corrected from wall time. (The half-percent "drift" seen before
+        // 2026-09-05 was sample loss from synchronous reads; see sdr::run.)
+        // A genuine USB loss shows as a discontinuity that MLAT servers
+        // detect as a clock reset; a dongle outage (below) is such a reset
+        // and is logged.
         let mut short_reads: u64 = 0;
         let mut last_short_report = Instant::now();
         loop {
-            while let Ok(t) = gain_rx.try_recv() {
-                match dev.set_gain(t) {
-                    Ok(got) => cfg.gain = GainMode::Fixed(got),
-                    Err(e) => eprintln!("rx: set gain: {e}"),
+            let mut applied: Option<i32> = None;
+            let mut stop = false;
+            let run = dev.run(BUF_COUNT, BUF_BYTES as u32, |bytes, d| {
+                while let Ok(t) = gain_rx.try_recv() {
+                    match d.set_gain(t) {
+                        Ok(got) => applied = Some(got),
+                        Err(e) => eprintln!("rx: set gain: {e}"),
+                    }
                 }
-            }
-            let mut buf = vec![0u8; BLOCK_BYTES];
-            let read_started = Instant::now();
-            let n = match dev.read(&mut buf) {
-                Ok(n) => n,
-                Err(e) => {
-                    // The outage is a gap: the clock advances by wall time so
-                    // the frames after the replug keep true timestamps.
-                    eprintln!("rx: dongle lost ({e}), reopening");
-                    let lost_at = Instant::now();
-                    drop(dev);
-                    dev = open_radio(&cfg);
-                    let gap = (lost_at.elapsed().as_secs_f64() * SAMPLE_RATE as f64) as u64;
-                    clock += gap;
-                    delivered += gap;
-                    gaps += 1;
+                let buf = bytes[..bytes.len() & !1].to_vec();
+                let samples = (buf.len() / 2) as u64;
+                if clock_debug {
+                    let expected = (t0.elapsed().as_secs_f64() * SAMPLE_RATE as f64) as i64;
+                    let lag = expected - (delivered + samples) as i64;
                     eprintln!(
-                        "rx: dongle back after {:.1} s (gap {})",
-                        lost_at.elapsed().as_secs_f64(),
-                        gaps
+                        "rx: clock lag {:.1} ms samples {}",
+                        lag as f64 / SAMPLE_RATE as f64 * 1e3,
+                        samples
                     );
-                    continue;
                 }
-            };
-            buf.truncate(n & !1);
-            let samples = (buf.len() / 2) as u64;
-            let read_took = read_started.elapsed();
-            if clock_debug {
-                let expected = (t0.elapsed().as_secs_f64() * SAMPLE_RATE as f64) as i64;
-                let lag = expected - (delivered + samples) as i64;
-                eprintln!(
-                    "rx: clock read {:.1} ms lag {:.1} ms samples {}",
-                    read_took.as_secs_f64() * 1e3,
-                    lag as f64 / SAMPLE_RATE as f64 * 1e3,
-                    samples
-                );
+                if (samples as usize) < BUF_BYTES / 4 {
+                    short_reads += 1;
+                }
+                if short_reads > 0 && last_short_report.elapsed() >= Duration::from_secs(60) {
+                    eprintln!("rx: {short_reads} short reads in the last minute");
+                    short_reads = 0;
+                    last_short_report = Instant::now();
+                }
+                let first = clock;
+                clock += samples;
+                delivered += samples;
+                let clipped = count_clipped(&buf);
+                if tx
+                    .send(Block {
+                        first_sample: first,
+                        bytes: buf,
+                        clipped,
+                    })
+                    .is_err()
+                {
+                    stop = true;
+                    d.cancel();
+                }
+            });
+            if let Some(got) = applied {
+                cfg.gain = GainMode::Fixed(got);
             }
-            if (samples as usize) < BLOCK_BYTES / 2 {
-                short_reads += 1;
-            }
-            if short_reads > 0 && last_short_report.elapsed() >= Duration::from_secs(60) {
-                eprintln!("rx: {short_reads} short reads in the last minute");
-                short_reads = 0;
-                last_short_report = Instant::now();
-            }
-            let first = clock;
-            clock += samples;
-            delivered += samples;
-            let clipped = count_clipped(&buf);
-            if tx
-                .send(Block {
-                    first_sample: first,
-                    bytes: buf,
-                    clipped,
-                })
-                .is_err()
-            {
+            if stop {
                 return Ok(());
             }
+            // The stream ended without being asked to: the dongle is gone.
+            // The outage is a gap: the clock advances by wall time so the
+            // frames after the replug keep true timestamps.
+            let why = match run {
+                Ok(()) => "USB stream ended".to_string(),
+                Err(e) => e.to_string(),
+            };
+            eprintln!("rx: dongle lost ({why}), reopening");
+            let lost_at = Instant::now();
+            drop(dev);
+            dev = open_radio(&cfg);
+            let gap = (lost_at.elapsed().as_secs_f64() * SAMPLE_RATE as f64) as u64;
+            clock += gap;
+            delivered += gap;
+            gaps += 1;
+            eprintln!(
+                "rx: dongle back after {:.1} s (gap {})",
+                lost_at.elapsed().as_secs_f64(),
+                gaps
+            );
         }
     });
 

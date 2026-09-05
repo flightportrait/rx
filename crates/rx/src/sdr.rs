@@ -31,12 +31,14 @@ extern "C" {
     fn rtlsdr_set_agc_mode(dev: *mut RtlsdrDev, on: c_int) -> c_int;
     fn rtlsdr_set_bias_tee(dev: *mut RtlsdrDev, on: c_int) -> c_int;
     fn rtlsdr_reset_buffer(dev: *mut RtlsdrDev) -> c_int;
-    fn rtlsdr_read_sync(
+    fn rtlsdr_read_async(
         dev: *mut RtlsdrDev,
-        buf: *mut c_void,
-        len: c_int,
-        n_read: *mut c_int,
+        cb: extern "C" fn(*mut u8, u32, *mut c_void),
+        ctx: *mut c_void,
+        buf_num: u32,
+        buf_len: u32,
     ) -> c_int;
+    fn rtlsdr_cancel_async(dev: *mut RtlsdrDev) -> c_int;
 }
 
 pub struct Device {
@@ -132,7 +134,7 @@ impl Device {
     }
 
     /// Manual gain in tenths of a dB, snapped to the nearest supported step.
-    pub fn set_gain(&mut self, tenths_db: i32) -> Result<i32> {
+    pub fn set_gain(&self, tenths_db: i32) -> Result<i32> {
         let g = *self
             .gains
             .iter()
@@ -150,7 +152,7 @@ impl Device {
     }
 
     /// Hardware automatic gain (tuner AGC and RTL2832 AGC).
-    pub fn set_agc(&mut self) -> Result<()> {
+    pub fn set_agc(&self) -> Result<()> {
         check(
             unsafe { rtlsdr_set_tuner_gain_mode(self.dev, 0) },
             "set_tuner_gain_mode",
@@ -171,21 +173,42 @@ impl Device {
         check(unsafe { rtlsdr_reset_buffer(self.dev) }, "reset_buffer")
     }
 
-    /// Blocking read of exactly `buf.len()` bytes (interleaved I, Q).
-    pub fn read(&mut self, buf: &mut [u8]) -> Result<usize> {
-        let mut n: c_int = 0;
+    /// Stream samples until `cancel` is called from inside `f` or the
+    /// device fails. librtlsdr keeps `buf_num` USB transfers of `buf_len`
+    /// bytes queued, so the dongle's FIFO never waits on the host; a
+    /// synchronous read leaves the bus idle between transfers and the
+    /// RTL2832U silently drops samples in that gap (1.5 % of the stream on
+    /// a Pi 3B, enough to defeat MLAT clock sync). `f` runs on this thread
+    /// for every completed transfer and must return promptly.
+    pub fn run(&self, buf_num: u32, buf_len: u32, mut f: impl FnMut(&[u8], &Device)) -> Result<()> {
+        struct Ctx<'a> {
+            dev: &'a Device,
+            f: &'a mut dyn FnMut(&[u8], &Device),
+        }
+        extern "C" fn trampoline(buf: *mut u8, len: u32, ctx: *mut c_void) {
+            let ctx = unsafe { &mut *(ctx as *mut Ctx) };
+            let bytes = unsafe { std::slice::from_raw_parts(buf, len as usize) };
+            (ctx.f)(bytes, ctx.dev);
+        }
+        let mut ctx = Ctx { dev: self, f: &mut f };
         let r = unsafe {
-            rtlsdr_read_sync(
+            rtlsdr_read_async(
                 self.dev,
-                buf.as_mut_ptr() as *mut c_void,
-                buf.len() as c_int,
-                &mut n,
+                trampoline,
+                &mut ctx as *mut Ctx as *mut c_void,
+                buf_num,
+                buf_len,
             )
         };
         if r != 0 {
-            bail!("rtlsdr_read_sync failed: {r} (USB error)");
+            bail!("rtlsdr_read_async failed: {r} (USB error)");
         }
-        Ok(n as usize)
+        Ok(())
+    }
+
+    /// Stop `run`; it returns after the queued transfers are cancelled.
+    pub fn cancel(&self) {
+        unsafe { rtlsdr_cancel_async(self.dev) };
     }
 }
 
