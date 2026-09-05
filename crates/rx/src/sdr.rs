@@ -190,7 +190,10 @@ impl Device {
             let bytes = unsafe { std::slice::from_raw_parts(buf, len as usize) };
             (ctx.f)(bytes, ctx.dev);
         }
-        let mut ctx = Ctx { dev: self, f: &mut f };
+        let mut ctx = Ctx {
+            dev: self,
+            f: &mut f,
+        };
         let r = unsafe {
             rtlsdr_read_async(
                 self.dev,
