@@ -1,11 +1,26 @@
 # rx
 
-rx is the Station radio: it drives an RTL-SDR, demodulates Mode S with
-the decoder benchmarked in demod-bench, keeps an aircraft table, and
-speaks Beast on the network. It does what the station used readsb for.
-It is one binary, one process, supervised by stationd.
+rx is the Station radio: it drives an RTL-SDR, demodulates Mode S,
+keeps an aircraft table, and speaks Beast on the network. It does what
+a station used readsb for, in one binary and one process, supervised
+by [stationd](https://github.com/flightportrait/station). Its decoder
+is scored against readsb on replayed captures before every change
+ships; on a Pi 3B the whole radio takes about a fifth of one core.
 
-Status: private, milestone R2 of the plan below. Runs on the Pi 3B.
+Status: v0.1, running on our own station since 2026-09-05 with readsb
+as the fallback radio. The milestones and their acceptance tests are in
+[docs/PLAN.md](docs/PLAN.md).
+
+## Build
+
+```sh
+sudo apt-get install librtlsdr-dev    # rx links librtlsdr dynamically
+cargo build --release
+```
+
+Release binaries for x86_64 and aarch64 glibc are on the
+[releases page](https://github.com/flightportrait/rx/releases); they
+need `librtlsdr0` from the distribution.
 
 ## Crates
 
@@ -13,8 +28,8 @@ Status: private, milestone R2 of the plan below. Runs on the Pi 3B.
 - `demod`: the decoder. Preamble detection on a fifth-of-a-sample grid,
   integer bit slicing, soft-decision CRC repair, address-parity repair,
   timing retries, and collision recovery by subtracting a decoded frame
-  from the I/Q and rescanning. demod-bench depends on this crate, so the
-  bench always scores what the radio ships.
+  from the I/Q and rescanning. Our replay bench depends on this crate,
+  so the bench always scores what the radio ships.
 - `rx`: the radio. `sdr` binds librtlsdr (LGPL, dynamically linked);
   `beast` encodes frames and runs the server and connectors; `reduce`
   is the rate-limited stream the aggregators ingest; `track` is the
@@ -23,8 +38,8 @@ Status: private, milestone R2 of the plan below. Runs on the Pi 3B.
 ## Run
 
 ```sh
-rx --gain 49.6 --net-bo-port 30005 --write-json /var/run/rx --lat 1.29849 --lon 103.85728 \\
-   --net-connector feed.flightportrait.com,30004,beast_reduce_plus_out,uuid=<station-uuid> \\
+rx --gain 49.6 --net-bo-port 30005 --write-json /var/run/rx --lat 1.29849 --lon 103.85728 \
+   --net-connector feed.flightportrait.com,30004,beast_reduce_plus_out,uuid=<station-uuid> \
    --net-connector in.adsb.lol,30004,beast_reduce_plus_out,uuid=<uuid>
 ```
 
@@ -84,48 +99,11 @@ on the status page; crash fallbacks retry rx after an hour. Drilled
 2026-09-05 on the Pi: three kills, readsb up in seconds, rx back on the
 next restart.
 
-## Plan
-
-- R0 dongle in, honest clock: done 2026-09-05 (30-minute soak on the Pi
-  3B, no gaps).
-- R1 live decoder with Beast timestamps: done. readsb in network-only
-  mode builds a correct aircraft table from rx's stream, and rx live
-  matches the bench replaying the same ten minutes to within one frame
-  (3700 live, 3699 offline; readsb offline 1931 CRC-valid frames to
-  rx's 1990, address-parity 1542 to 1709, every repaired position
-  consistent with its track).
-- R2 Beast server, connectors, reduced stream, UUID hello: done and
-  accepted 2026-09-05. rx on the Pi fed feed.flightportrait.com over a
-  `beast_reduce_plus_out` connector with a fresh UUID; the hub took the
-  connection, and the public API listed the station online under the
-  id derived from that UUID (fp-1a9a5a0e4e). rx at 17 % of a Pi 3B core
-  and 6 MB resident with every frame cancelled.
-- R3 aircraft table and the consistency check: done in code; the zero
-  inconsistent repaired positions live is the acceptance test.
-- R4 aircraft.json for stationd: done.
-- R5 shadow and swap: started 2026-09-05. The Pi station's config
-  points its radio at rx (the readsb line kept in station.toml.readsb
-  for a one-line revert); stationd, mlatc and the status page run
-  unchanged on it. `--clip-dir` writes ten seconds of raw I/Q every ten
-  minutes; leserveur pulls the clips nightly (`~/shadow/shadow.sh`,
-  cron 03:17 UTC) and appends one line per clip to `~/shadow/shadow.log`
-  with CRC-valid and address-parity counts for rx and readsb, flagging
-  any aircraft only rx reported. The first night flagged three; all
-  three are real (two appear in readsb's output in neighbouring clips,
-  the third is a clean all-call readsb missed), so the flag means "readsb
-  missed it", and a false frame would show as an address neither the
-  aggregators nor later clips know. Two weeks ahead with no
-  false frames, then rx becomes the installer's default with readsb as
-  fallback.
-
-Timestamp integrity, 2026-09-05: three minutes recorded while the live
-Beast stream was collected; every one of the 476 live frames matched
-the offline replay with a clock offset of exactly zero ticks from start
-to end.
-
 Not in scope: Mode A/C, 978 MHz, other SDRs, the web map, history,
 graphs, the aircraft database.
 
 ## License
 
-AGPL-3.0-or-later. librtlsdr is LGPL and linked dynamically.
+AGPL-3.0-or-later ([LICENSE-AGPL](LICENSE-AGPL)) for `rx` and `demod`;
+`iq` is MIT ([LICENSE-MIT](LICENSE-MIT)). librtlsdr is LGPL and linked
+dynamically.

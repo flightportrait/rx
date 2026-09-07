@@ -140,7 +140,7 @@ dependencies = [
 
 [[package]]
 name = "demod"
-version = "0.1.0"
+version = "0.1.2"
 dependencies = [
  "mb-modes",
 ]
@@ -184,7 +184,7 @@ checksum = "2304e00983f87ffb38b55b444b5e3b60a884b5d30c0fca7d82fe33449bbe55ea"
 
 [[package]]
 name = "iq"
-version = "0.1.0"
+version = "0.1.2"
 dependencies = [
  "anyhow",
 ]
@@ -203,8 +203,8 @@ checksum = "3eaf3ede3fee6db1a4c2ee091bf8a8b4dccdc6d17f656fb07896ee72867612f2"
 
 [[package]]
 name = "mb-core"
-version = "0.1.0"
-source = "git+https://github.com/flightportrait/mlatc?tag=v0.1.0#6ac5e8c1ba25644a6aa43ccb425740011503352b"
+version = "0.1.2"
+source = "git+https://github.com/flightportrait/mlatc?tag=v0.1.2#19e9b0c9c07f568c5aca86e12cdd41bd4d1f0daa"
 dependencies = [
  "rand",
  "rand_chacha",
@@ -214,8 +214,8 @@ dependencies = [
 
 [[package]]
 name = "mb-modes"
-version = "0.1.0"
-source = "git+https://github.com/flightportrait/mlatc?tag=v0.1.0#6ac5e8c1ba25644a6aa43ccb425740011503352b"
+version = "0.1.2"
+source = "git+https://github.com/flightportrait/mlatc?tag=v0.1.2#19e9b0c9c07f568c5aca86e12cdd41bd4d1f0daa"
 dependencies = [
  "mb-core",
 ]
@@ -285,7 +285,7 @@ dependencies = [
 
 [[package]]
 name = "rx"
-version = "0.1.0"
+version = "0.1.2"
 dependencies = [
  "anyhow",
  "clap",

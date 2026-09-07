@@ -1,11 +1,12 @@
-//! rx: the Station radio. Milestone R0: drive the dongle, keep an honest
-//! sample clock, run the decoder live, report rates.
+//! rx: the Station radio. Drives the dongle, keeps an honest sample
+//! clock, runs the decoder live, keeps the aircraft table, speaks Beast.
 //!
-//! One thread reads the dongle into fixed blocks; the main thread converts
-//! and decodes. The sample counter is the clock every frame timestamp
-//! derives from (12 MHz Beast ticks = 5 per sample), so lost samples must
-//! advance it: the reader compares samples delivered with wall time and
-//! accounts a gap when the dongle falls behind by more than a block.
+//! librtlsdr's asynchronous reader delivers fixed transfers on its own
+//! thread; the main thread converts and decodes. The sample counter is
+//! the clock every frame timestamp derives from (12 MHz Beast ticks = 5
+//! per sample). It counts delivered samples only and is never corrected
+//! from wall time; a dongle outage advances it by the outage length so
+//! frames after a replug keep true timestamps.
 
 mod beast;
 mod beast_in;
@@ -273,8 +274,8 @@ fn main() -> Result<()> {
         let mut clock: u64 = 0; // stream index including accounted gaps
         let mut gaps: u64 = 0;
         // The clock is the count of delivered samples, as in readsb, not
-        // corrected from wall time. (The half-percent "drift" seen before
-        // 2026-09-05 was sample loss from synchronous reads; see sdr::run.)
+        // corrected from wall time. Synchronous reads once lost samples
+        // between transfers and looked like drift; see sdr::run.
         // A genuine USB loss shows as a discontinuity that MLAT servers
         // detect as a clock reset; a dongle outage (below) is such a reset
         // and is logged.
