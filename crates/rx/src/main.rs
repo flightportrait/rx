@@ -30,7 +30,7 @@ const BUF_COUNT: u32 = 15;
 const BUF_BYTES: usize = 262_144;
 
 #[derive(Parser)]
-#[command(about = "The Station radio: RTL-SDR in, Mode S frames out")]
+#[command(version, about = "The Station radio: RTL-SDR in, Mode S frames out")]
 struct Args {
     /// Device index.
     #[arg(long, default_value_t = 0)]
