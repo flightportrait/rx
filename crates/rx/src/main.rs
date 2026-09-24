@@ -11,6 +11,7 @@
 mod beast;
 mod beast_in;
 mod gain;
+mod json_serve;
 mod reduce;
 mod sdr;
 mod stats;
@@ -88,9 +89,15 @@ struct Args {
     /// aggregators are happy with 500).
     #[arg(long, default_value_t = 500)]
     reduce_interval: u64,
-    /// Write aircraft.json into this directory every second.
+    /// Write aircraft.json into this directory every second. Prefer
+    /// --json-listen: a file rewritten every second wears an SD card out.
     #[arg(long)]
     write_json: Option<String>,
+    /// Serve aircraft.json and stats.json over HTTP on this address
+    /// ("" = none), e.g. 127.0.0.1:30006 for the station on this machine.
+    /// Nothing is written to disk.
+    #[arg(long, default_value = "")]
+    json_listen: String,
     /// Receiver position, for range figures.
     #[arg(long, default_value_t = 0.0)]
     lat: f64,
@@ -364,6 +371,17 @@ fn main() -> Result<()> {
         hub.serve(&listen)?;
         eprintln!("rx: Beast server on {listen}");
     }
+    let docs = if a.json_listen.is_empty() {
+        None
+    } else {
+        let d = std::sync::Arc::new(json_serve::Docs::default());
+        json_serve::serve(&a.json_listen, d.clone())?;
+        eprintln!(
+            "rx: aircraft.json and stats.json on http://{}/",
+            a.json_listen
+        );
+        Some(d)
+    };
     let (in_tx, in_rx) = mpsc::channel::<beast_in::InFrame>();
     if let Some(p) = a.net_bi_port {
         beast_in::listen(&format!("0.0.0.0:{p}"), in_tx.clone())?;
@@ -578,6 +596,10 @@ fn main() -> Result<()> {
                 }
             }
             st.tick(now, json_dir.as_deref());
+            if let Some(d) = &docs {
+                *d.aircraft.lock().unwrap() = tracker.render_json(now);
+                *d.stats.lock().unwrap() = st.render(now);
+            }
             report_ticks += 1;
             if a.verbose || report_ticks.is_multiple_of(60) {
                 eprintln!(

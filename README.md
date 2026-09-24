@@ -38,7 +38,7 @@ need `librtlsdr0` from the distribution.
 ## Run
 
 ```sh
-rx --gain 49.6 --net-bo-port 30005 --write-json /var/run/rx --lat 1.29849 --lon 103.85728 \
+rx --gain 49.6 --net-bo-port 30005 --json-listen 127.0.0.1:30006 --lat 1.29849 --lon 103.85728 \
    --net-connector feed.flightportrait.com,30004,beast_reduce_plus_out,uuid=<station-uuid> \
    --net-connector in.adsb.lol,30004,beast_reduce_plus_out,uuid=<uuid>
 ```
@@ -73,8 +73,13 @@ configured for readsb runs rx by changing the binary path.
   from mlatc reach the aircraft table as MLAT positions (never
   overriding an ADS-B position younger than 30 s) and are forwarded on
   the full stream, never on the reduced one.
-- `stats.json` beside aircraft.json every 10 s, readsb's shape for the
-  fields rx has.
+- `--json-listen host:port` serves `aircraft.json` and `stats.json` over
+  HTTP from memory, refreshed every second: the station reads them from
+  the socket and nothing is written to disk. `--write-json dir` is
+  readsb's file form, kept for compatibility; a file rewritten every
+  second is what wears SD cards out, so prefer the socket.
+- `stats.json` beside aircraft.json (every 10 s as a file), readsb's
+  shape for the fields rx has.
 - Every emitted frame carries its repaired-bit count internally; a
   repaired position message that contradicts the aircraft's track (more
   than 400 m/s of travel plus 2 km from its last position) is rejected

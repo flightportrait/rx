@@ -1,5 +1,6 @@
 //! stats.json in readsb's shape for the fields the radio has: totals since
-//! start and the last minute, written every 10 s beside aircraft.json.
+//! start and the last minute, written every 10 s beside aircraft.json
+//! or served beside it.
 //! Signal and noise are dBFS with full scale at magnitude 181 (the
 //! largest magnitude an 8-bit I/Q sample can have).
 
@@ -137,16 +138,21 @@ impl Stats {
         )
     }
 
-    fn write(&self, dir: &std::path::Path, now: f64) -> std::io::Result<()> {
+    /// stats.json as text.
+    pub fn render(&self, now: f64) -> String {
         let mut last = Bucket::default();
         for b in &self.minute {
             last.add(b);
         }
-        let s = format!(
+        format!(
             "{{\"now\":{now:.1},\"total\":{},\"last1min\":{}}}",
             self.section(&self.total, self.start, now),
             self.section(&last, now - self.minute.len() as f64, now)
-        );
+        )
+    }
+
+    fn write(&self, dir: &std::path::Path, now: f64) -> std::io::Result<()> {
+        let s = self.render(now);
         let tmp = dir.join("stats.json.tmp");
         let mut f = std::fs::File::create(&tmp)?;
         f.write_all(s.as_bytes())?;

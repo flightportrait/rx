@@ -239,6 +239,15 @@ impl Tracker {
 
     /// Write aircraft.json in readsb's shape for the fields we have.
     pub fn write_json(&self, dir: &std::path::Path, now: f64) -> std::io::Result<()> {
+        let s = self.render_json(now);
+        let tmp = dir.join("aircraft.json.tmp");
+        let mut f = std::fs::File::create(&tmp)?;
+        f.write_all(s.as_bytes())?;
+        std::fs::rename(tmp, dir.join("aircraft.json"))
+    }
+
+    /// aircraft.json as text, in readsb's shape for the fields we have.
+    pub fn render_json(&self, now: f64) -> String {
         let mut s = String::new();
         s.push_str(&format!(
             "{{\"now\":{now:.1},\"messages\":{},\"aircraft\":[",
@@ -275,10 +284,7 @@ impl Tracker {
             s.push('}');
         }
         s.push_str("]}");
-        let tmp = dir.join("aircraft.json.tmp");
-        let mut f = std::fs::File::create(&tmp)?;
-        f.write_all(s.as_bytes())?;
-        std::fs::rename(tmp, dir.join("aircraft.json"))
+        s
     }
 }
 
